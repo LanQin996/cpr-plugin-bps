@@ -22,4 +22,6 @@ It does not include the upstream Go dependency implementations. Their texts
 remain in the preserved license collection as part of the upstream notice.
 
 gateway-plugin-sdk is consumed from codex-proxy-rs under Apache-2.0.
+The management page consumes @codex-proxy/ui v0.8.0 under Apache-2.0.
+Its license is preserved in licenses/codex-proxy-ui.txt; its source was not modified.
 This plugin is unofficial and is not affiliated with OpenAI or Codex Proxy RS.

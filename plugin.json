@@ -3,7 +3,7 @@
   "name": "bps",
   "displayName": "BPS 原生适配器",
   "publisher": "local",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "原生实现 BPS OAuth、WebSocket、Responses 和客户端工具协议，不需要本地桥接服务",
   "license": "MIT",
   "engines": { "codex-proxy-rs": ">=3.33.0, <4.0.0" },
@@ -12,7 +12,11 @@
   "resources": {
     "LICENSE": "text/plain",
     "NOTICE": "text/plain",
-    "licenses/bps-local.txt": "text/plain"
+    "licenses/bps-local.txt": "text/plain",
+    "licenses/codex-proxy-ui.txt": "text/plain",
+    "web/index.html": "text/html",
+    "web/app.js": "text/javascript",
+    "web/app.css": "text/css"
   },
   "contributes": {
     "upstream_adapter": {
@@ -21,25 +25,28 @@
       "outputFormats": ["openai"]
     },
     "model_catalog": { "version": 2 },
-    "command_line": {}
+    "command_line": {},
+    "management": { "version": 2 }
   },
   "configurationSchema": {
     "type": "object",
-    "required": ["accounts"],
     "additionalProperties": false,
     "properties": {
       "accounts": {
         "title": "BPS 账号",
-        "description": "宿主占位账号与独立 BPS OAuth 对应；通过插件 CLI 登录或导入 OAuth",
+        "description": "由 BPS 账号管理页面维护，无需手动编辑",
         "type": "array",
-        "minItems": 1,
-        "maxItems": 16,
+        "default": [],
+        "minItems": 0,
+        "maxItems": 256,
         "items": {
           "type": "object",
           "required": ["accountId", "models"],
           "additionalProperties": false,
           "properties": {
             "accountId": { "title": "宿主 OpenAI URL + Key 账号 ID", "type": "string", "minLength": 1, "maxLength": 256 },
+            "label": { "title": "账号名称", "type": "string", "maxLength": 120 },
+            "credentialSource": { "title": "凭据来源", "enum": ["independent", "host"], "default": "independent" },
             "models": {
               "title": "有权使用的模型 ID",
               "description": "不会自动探测模型权限，也不会将模型替换为其他模型",
@@ -48,6 +55,13 @@
             }
           }
         }
+      },
+      "hostSelection": {
+        "type":"object","additionalProperties":false,
+        "properties": {
+          "groupIds":{"type":"array","maxItems":256,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":256}},
+          "accountIds":{"type":"array","maxItems":256,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":256}}
+        }
       }
     }
   },
@@ -55,8 +69,8 @@
     "namespace": "oauth",
     "schemaVersion": 1,
     "schema": { "type": "object" },
-    "maximumRecords": 32,
-    "maximumBytes": 2097152,
+    "maximumRecords": 64,
+    "maximumBytes": 4194304,
     "maximumValueBytes": 65536,
     "migratesFrom": []
   }]

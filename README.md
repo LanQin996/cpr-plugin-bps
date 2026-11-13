@@ -12,8 +12,10 @@ Responses 客户端 → Codex Proxy RS → 本插件 → BPS WebSocket
 ## 实现范围
 
 - 原生 BPS `response.create`、Excel 客户端 profile、认证子协议、请求 ID 和 resume token
-- 独立 BPS 设备授权、PKCE 验证、OAuth JSON 导入、有效期检查和退出登录
-- 多账号：每个显式宿主账号对应一份 BPS OAuth；不接管其他 OpenAI 账号
+- 优先复用宿主已有 OpenAI OAuth 账号，无需重新登录，沿用原账号代理和宿主凭据刷新
+- 安装即启用，管理页面提供宿主账号选择、模型设置和取消接入
+- 独立 BPS 设备授权、PKCE 验证和 OAuth 文件导入作为可选备用方式
+- 多账号：按所选账号和模型接入，不改变现有 Key 权限
 - Responses 文本、完整历史、加密推理状态、配置更新、HTTPS 图片输入
 - function/custom/namespace 工具目录、`run_officejs` 信封、原生 `update_plan` 适配
 - 工具调用只交回客户端，不执行 OfficeJS、Shell 或任何工具代码
@@ -22,7 +24,7 @@ Responses 客户端 → Codex Proxy RS → 本插件 → BPS WebSocket
 - 流式 SSE 与 `stream:false` 最终 JSON、用量/缓存/推理 Token、唯一终态与连接回收
 - BPS 控制帧、私有 cursor 过滤；握手拒绝、流内失败、断连与取消不自动重放
 
-当前版本对齐原项目默认 **WS** 路径，不包含独立 CLI 的本地 HTTP 服务器、启动脚本、legacy SSE transport、实验性 ARC 初始化、图像中继托管或协议诊断命令。没有管理页面；配置使用宿主配置表单，登录使用插件 CLI。
+当前版本对齐原项目默认 **WS** 路径，不包含独立 CLI 的本地 HTTP 服务器、启动脚本、legacy SSE transport、实验性 ARC 初始化、图像中继托管或协议诊断命令。
 
 ## 兼容要求
 
@@ -37,31 +39,37 @@ Issue #278 发布时的 `v3.14.0` 不等于当前插件合同。本插件没有�
 
 安装包从本仓库的 [GitHub Releases](https://github.com/LanQin996/cpr-plugin-bps/releases/latest) 下载，不是 Actions 附件或 GitHub 自动生成的 Source code。也可在宿主中选择 GitHub 来源 `LanQin996/cpr-plugin-bps` 安装。
 
-1. 在宿主创建专用 **OpenAI URL + Key** 占位账号，协议选择 Responses、HTTP transport。它只用于宿主的选号、ACL 和租约，不用于 BPS 认证。不要复用普通 OpenAI 生产账号。
-2. 占位账号可以使用固定目标 `https://bps.openai.com/basispoints/api/` 和非真实的占位 Key。不要对占位账号执行原生连通性测试或模型自动探测。
-3. 安装与宿主运行平台匹配的 `.tar.gz`，接受插件完整信任。源码目录和 `.exe` 不是安装包。
-4. 参考 `config.example.json`，填写实际账号 ID 和该 BPS 账号有权使用的模型，保存并启用：
+1. 安装与宿主运行平台匹配的 `.tar.gz` 并接受完整信任，空配置即可启用。
+2. 打开插件的 **BPS 账号管理** 页面，点击 **选择分组和账号**。
+3. 同时勾选多个分组和任意单账号，按 **分组成员 ∪ 单账号** 的并集启用。可以选择分组 A 的全部账号，再单独选择分组 B 的 b1，不会启用 b2，重复账号只计算一次。
+4. 确认“最终生效”的账号列表和数量，点击 **应用选择**，无需重新登录、创建占位账号或填写 JSON。
+5. 取消某个分组不会清除独立勾选的单账号。清空选择并应用可恢复所有宿主账号的原通道，原登录状态保持不变，独立 BPS 账号不受影响。
 
-```json
-{
-  "accounts": [
-    { "accountId": "YOUR_HOST_ACCOUNT_ID", "models": ["YOUR_AUTHORIZED_MODEL_ID"] }
-  ]
-}
-```
+分组选择按保存时的成员展开，只接入启用的 OpenAI OAuth 账号，不修改宿主账号或分组的启用状态。新增、移出分组的账号不会在后台自动接管，分组成员变化后刷新页面并重新应用选择。保存前后端重新读取目录并计算并集，模型设置保留已接入账号的原值。
 
-5. 保持默认的 `upstream` / `reject` 绑定，通过宿主账号组和 Key 权限控制谁可使用这些账号。适配模型目录不支持带 Key/账号组条件的适配器绑定；不要用这类绑定代替正常账号 ACL。
-6. 按下一节完成独立 BPS 登录，再通过宿主发起请求。
+复用模式每次生成从宿主读取当前所选账号的 OAuth，核对凭据 revision，不将 Token 复制到插件状态，不修改宿主 AT/RT。宿主按原有机制刷新凭据，账号代理和 Key 权限继续由宿主控制。插件只读取账号目录供选择，执行时才读取该账号的凭据，不读取本机 Codex 文件或浏览器登录信息。
 
-最多配置 16 个账号，每个最多 16 个模型；序列化模型目录还须不超过 64 KiB。不会自动探测、替换或降级模型。
+宿主 OAuth 可以尝试 BPS，但 BPS 是否接受其 app/scope、账号和模型权限仍以真实返回为准。授权被拒绝时显示上游原因，不自动跳转登录或覆盖原账号。切换到 BPS 后建议新建会话，不能复用原通道的 `previous_response_id`。
 
-**维护顺序：先停用 BPS 占位账号并排空请求，再停用或卸载插件。** 插件停用后，宿主不会把占位账号永久标记为“只能由插件执行”。
+### 独立 BPS 授权（可选）
+
+需要独立 Excel/BPS OAuth 时，选择 **独立 BPS 授权 → 获取设备码**，然后在浏览器完成授权。插件会自动检查授权结果、创建宿主占位账号并接入。也可选择 **导入文件**，直接选择独立 BPS OAuth JSON，不需要粘贴 JSON 或填写账号 ID。
+
+独立账号名称可选，默认模型预填原项目示例 `gpt-6-astra`，不是权限探测结果。两种模式都可在“模型设置”填写自己有权使用的模型，每行一个。最多接入 256 个账号，其中独立 OAuth 最多 16 个，每个账号最多 16 个模型。相同凭据来源和模型列表的账号共用适配声明，最多 16 种组合，注册和目录各不超过 64 KiB。
+
+授权成功会自动保存当前插件配置，宿主可能重新打开插件页面。如果授权已保存但接入未完成，点击“继续接入”可恢复，不会重新创建已记录的宿主账号。创建结果未知时只查询匹配操作的账号，不盲目重复创建。
+
+升级自 v0.1.0 时保留已有账号映射和 OAuth。新建或尚未配置的实例使用 `{}` 即可启用，然后从页面接入。原来的 CLI 登录仍可管理已接入账号。
+
+自动创建的宿主账号使用不可解析的 `bps-plugin.invalid` 占位地址，真实 OAuth 只放在插件私有状态。账号参与宿主选号、ACL 和租约，BPS 出站由本插件执行。不要对占位账号运行原生连通性测试或模型探测。停用或卸载插件前，先停用相关账号并排空请求。
+
+Key 的现有分组权限不会自动放宽。如果某个 Key 仅绑定固定账号组，仍需通过宿主常规权限管理将 BPS 账号纳入可用组。保持默认 `upstream` / `reject` 绑定，适配模型目录不支持带 Key/账号组条件的适配器绑定。
 
 ### 代理
 
 生成请求通过 `host.upstream.websocket.*`，使用所选宿主账号的代理和部署默认出口，代理失败不回退直连。设备授权通过宿主受管 HTTP，使用部署默认出口。两者可能不同，需分别确保可访问对应站点。
 
-## 原生登录
+## CLI 登录（可选）
 
 将下面的 `INSTANCE_ID` 替换为宿主实际插件实例 ID。多个账号时加 `--account YOUR_HOST_ACCOUNT_ID`，只有一个时可省略。
 
@@ -84,7 +92,7 @@ codex-proxy-rs plugin INSTANCE_ID status --account YOUR_HOST_ACCOUNT_ID
 codex-proxy-rs plugin INSTANCE_ID logout --account YOUR_HOST_ACCOUNT_ID
 ```
 
-OAuth 保存在插件私有 `oauth` 状态命名空间，按宿主账号隔离并使用版本 CAS。宿主备份也可能包含这些敏感数据，应按凭据保护。和参考项目一样，**不自动使用 Refresh Token 刷新**；AT 到期后需重新授权或导入。`status` 只检查本地元数据，不证明 BPS 生成权限。
+独立 BPS OAuth 保存在插件私有 `oauth` 状态命名空间，按宿主账号隔离并使用版本 CAS。宿主备份也可能包含这些敏感数据，应按凭据保护。独立授权模式和参考项目一样，**不自动使用 Refresh Token 刷新**，AT 到期后需重新授权或导入。复用宿主账号模式使用宿主当前凭据和刷新机制，不使用上述独立 OAuth 状态。`status` 只检查本地元数据，不证明 BPS 生成权限。
 
 ## 请求示例
 
@@ -112,12 +120,16 @@ curl -N "$CPR_BASE_URL/v1/responses" \
 
 ## 开发与打包
 
-使用 Rust **1.99.1**，依赖由 `Cargo.lock` 固定，无 Node 或 Go 构建步骤。
+使用 Rust **1.99.1**、Node.js **24+**、pnpm **10.33.2**，依赖分别由 `Cargo.lock` 和 `frontend/pnpm-lock.yaml` 固定，无 Go 构建步骤。
 
 ```bash
 cargo fmt --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo test --locked
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend build
+pnpm --dir frontend exec playwright install chromium
+pnpm --dir frontend test
 ```
 
 使用 Python 3.11+ 和同提交的官方 CLI 打包，不手写包摘要或平台元数据：
@@ -155,6 +167,8 @@ python scripts/package.py --target x86_64-unknown-linux-gnu --zig --install-cli
 | --- | --- |
 | `plugin.json` / `src/lib.rs` | 能力、私有状态和 `PluginBuilder` 注册 |
 | `src/auth.rs` | 设备授权、PKCE、导入、有效期和状态 CAS |
+| `src/management/` | 页面接口、可恢复自动建号和本实例配置发布 |
+| `frontend/` | Vue 管理页、公开宿主桥、主题组件与模拟预览 |
 | `src/adapter.rs` | BPS WebSocket、认证头、控制信息和连接生命周期 |
 | `src/protocol/` | BPS 请求、工具信封、历史、结构化输出和终态转换 |
 | `src/events.rs` | Responses wire、标准事实、用量和失败 |
@@ -164,3 +178,5 @@ python scripts/package.py --target x86_64-unknown-linux-gnu --zig --install-cli
 移植来源及原有许可说明见 `NOTICE` 和 `licenses/bps-local.txt`。参考源码保存在本地忽略目录 `.references/`，不参与构建或运行。
 
 测试中的宿主和 BPS 数据均为模拟夹具，不使用真实账号。真实 BPS 授权、模型生成、目标宿主安装和费用验证仍需在实际部署中验收。
+
+页面采用官方 `@codex-proxy/ui` v0.8.0 和宿主桥 v2。`pnpm --dir frontend dev` 提供本地模拟预览，明确标记模拟数据，正式安装包不会安装模拟宿主。浏览器测试覆盖宿主账号接入与取消、空状态、设备码、文件导入、模型设置、退出、错误和深色窄屏布局。

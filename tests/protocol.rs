@@ -47,8 +47,21 @@ fn manifest_builds_native_account_scoped_capabilities() {
     assert_eq!(config.catalog().models[0].adapter_id, "bps-0");
     assert!(plugin(config).is_ok());
     assert_eq!(manifest().unwrap().plugin_id().unwrap(), "local.bps");
+    let native = Config::parse(
+        json!({"accounts":[{"accountId":"host-account","models":["m"],"credentialSource":"host"}]}),
+    )
+    .unwrap();
+    assert_eq!(
+        native.registration().adapters[0].authentication_kinds,
+        vec!["oauth"]
+    );
+    for empty in [json!({}), json!({"accounts":[]})] {
+        let config = Config::parse(empty).unwrap();
+        assert!(config.registration().adapters.is_empty());
+        assert!(config.catalog().models.is_empty());
+        assert!(plugin(config).is_ok());
+    }
     for config in [
-        json!({"accounts":[]}),
         json!({"bridges":[]}),
         json!({"accounts":[{"accountId":"acct1","models":[]}]}),
         json!({"accounts":[{"accountId":"acct1","models":["m","m"]}]}),
@@ -460,4 +473,18 @@ fn oauth_jwt_metadata_cannot_be_extended_by_a_later_declared_expiry() {
     .unwrap();
     assert_eq!(credentials.expires_at, Some(expiry));
     assert_eq!(credentials.account_id, "from-claims");
+}
+
+#[test]
+fn large_host_groups_share_adapters_without_broadening_account_scope() {
+    let accounts: Vec<_> = (0..256)
+        .map(|i| json!({"accountId":format!("acct-{i}"),"models":["m"],"credentialSource":"host"}))
+        .collect();
+    let config = Config::parse(json!({"accounts":accounts})).unwrap();
+    let registration = config.registration();
+    assert_eq!(registration.adapters.len(), 1);
+    assert_eq!(registration.adapters[0].account_ids.len(), 256);
+    assert!(!registration.adapters[0].account_ids.is_empty());
+    assert_eq!(config.catalog().models.len(), 1);
+    assert_eq!(registration.adapters[0].authentication_kinds, vec!["oauth"]);
 }

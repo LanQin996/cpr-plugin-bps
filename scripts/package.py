@@ -18,7 +18,8 @@ SUPPORTED = (
 
 
 def run(*args, env=None):
-    subprocess.run(args, cwd=ROOT, env=env, check=True)
+    command = (shutil.which(args[0]) or args[0], *args[1:])
+    subprocess.run(command, cwd=ROOT, env=env, check=True)
 
 
 def main():
@@ -35,6 +36,8 @@ def main():
             "codex-proxy-plugin-cli", "--root", str(ROOT / ".tools"))
     if not cli.is_file():
         parser.error("Matching cpr-plugin CLI not found; use --install-cli or --cli.")
+    run("pnpm", "--dir", "frontend", "install", "--frozen-lockfile")
+    run("pnpm", "--dir", "frontend", "build")
     env = os.environ.copy()
     if args.zig:
         if "linux" not in args.target:
@@ -54,7 +57,7 @@ def main():
     if not binary.is_file():
         raise SystemExit(f"Built binary not found: {binary}")
     run(str(cli.resolve()), "package", "--manifest", str(ROOT / "plugin.json"), "--binary", str(binary),
-        "--target", args.target, "--output-dir", str(ROOT / "dist"))
+        "--target", args.target, "--resource-map", "web=frontend/dist", "--output-dir", str(ROOT / "dist"))
 
 
 if __name__ == "__main__":

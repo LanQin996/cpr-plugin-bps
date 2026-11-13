@@ -11,20 +11,53 @@ use gateway_plugin_sdk::{
         },
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
     pub accounts: Vec<Account>,
+    #[serde(
+        default,
+        rename = "hostSelection",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub host_selection: Option<HostSelection>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostSelection {
+    #[serde(default)]
+    pub group_ids: Vec<String>,
+    #[serde(default)]
+    pub account_ids: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Account {
     pub account_id: String,
     pub models: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "CredentialSource::is_independent")]
+    pub credential_source: CredentialSource,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialSource {
+    #[default]
+    Independent,
+    Host,
+}
+impl CredentialSource {
+    fn is_independent(&self) -> bool {
+        *self == Self::Independent
+    }
 }
 
 pub(crate) fn invalid(message: &'static str) -> PluginFault {
@@ -35,11 +68,33 @@ impl Config {
     pub fn parse(value: serde_json::Value) -> Result<Self, PluginFault> {
         let config: Self = serde_json::from_value(value)
             .map_err(|_| invalid("Invalid BPS configuration. See config.example.json."))?;
-        if config.accounts.is_empty() || config.accounts.len() > 16 {
-            return Err(invalid("Configure between 1 and 16 BPS accounts."));
+        if config.accounts.len() > 256 {
+            return Err(invalid("Configure at most 256 BPS accounts."));
+        }
+        if config
+            .accounts
+            .iter()
+            .filter(|account| account.credential_source == CredentialSource::Independent)
+            .count()
+            > 16
+        {
+            return Err(invalid(
+                "At most 16 independent BPS OAuth accounts are supported.",
+            ));
+        }
+        if let Some(selection) = &config.host_selection {
+            for ids in [&selection.group_ids, &selection.account_ids] {
+                let mut unique = BTreeSet::new();
+                if ids.len() > 256 || ids.iter().any(|id| !identifier(id) || !unique.insert(id)) {
+                    return Err(invalid("Invalid host-account selection."));
+                }
+            }
         }
         let mut accounts = BTreeSet::new();
         for account in &config.accounts {
+            if account.label.len() > 120 || account.label.chars().any(char::is_control) {
+                return Err(invalid("BPS account label is invalid."));
+            }
             if !identifier(&account.account_id) || !accounts.insert(account.account_id.clone()) {
                 return Err(invalid(
                     "Each BPS account must have a unique, non-empty accountId.",
@@ -63,29 +118,62 @@ impl Config {
                 "BPS model catalog exceeds 64 KiB. Configure fewer models.",
             ));
         }
+        if config.registration().adapters.len() > 16 {
+            return Err(invalid(
+                "At most 16 distinct BPS credential-source/model combinations are supported.",
+            ));
+        }
+        if serde_json::to_vec(&config.registration()).map_or(true, |raw| raw.len() > 64 * 1024) {
+            return Err(invalid("BPS adapter registration exceeds 64 KiB."));
+        }
         Ok(config)
     }
 
     pub fn registration(&self) -> UpstreamAdapterRegistration {
+        let mut groups: Vec<(CredentialSource, Vec<String>, Vec<String>)> = vec![];
+        for account in &self.accounts {
+            let mut models = account.models.clone();
+            models.sort();
+            if let Some(group) = groups
+                .iter_mut()
+                .find(|group| group.0 == account.credential_source && group.1 == models)
+            {
+                group.2.push(account.account_id.clone());
+            } else {
+                groups.push((
+                    account.credential_source,
+                    models,
+                    vec![account.account_id.clone()],
+                ));
+            }
+        }
         UpstreamAdapterRegistration {
-            adapters: self
-                .accounts
+            adapters: groups
                 .iter()
                 .enumerate()
-                .map(|(index, account)| UpstreamAdapterDeclaration {
-                    id: format!("bps-{index}"),
-                    provider: BuiltinProvider::OpenAi,
-                    base_url: "https://bps.openai.com/".into(),
-                    paths: vec![UpstreamPath {
-                        path: "basispoints/api/responses".into(),
-                        purpose: UpstreamPathPurpose::Inference,
-                    }],
-                    authentication_kinds: vec!["api_key".into()],
-                    transport: UpstreamTransport::WebSocket,
-                    protocol: "openai".into(),
-                    models: account.models.clone(),
-                    account_ids: vec![account.account_id.clone()],
-                })
+                .map(
+                    |(index, (source, models, ids))| UpstreamAdapterDeclaration {
+                        id: format!("bps-{index}"),
+                        provider: BuiltinProvider::OpenAi,
+                        base_url: "https://bps.openai.com/".into(),
+                        paths: vec![UpstreamPath {
+                            path: "basispoints/api/responses".into(),
+                            purpose: UpstreamPathPurpose::Inference,
+                        }],
+                        authentication_kinds: vec![
+                            if *source == CredentialSource::Host {
+                                "oauth"
+                            } else {
+                                "api_key"
+                            }
+                            .into(),
+                        ],
+                        transport: UpstreamTransport::WebSocket,
+                        protocol: "openai".into(),
+                        models: models.clone(),
+                        account_ids: ids.clone(),
+                    },
+                )
                 .collect(),
         }
     }
@@ -94,13 +182,13 @@ impl Config {
         ModelCatalogRegistrationV2 {
             aliases: vec![],
             models: self
-                .accounts
+                .registration()
+                .adapters
                 .iter()
-                .enumerate()
-                .flat_map(|(index, account)| {
-                    account.models.iter().map(move |id| AdaptedModel {
+                .flat_map(|adapter| {
+                    adapter.models.iter().map(move |id| AdaptedModel {
                         id: id.clone(),
-                        adapter_id: format!("bps-{index}"),
+                        adapter_id: adapter.id.clone(),
                         features: vec![
                             RequestFeature::Tools,
                             RequestFeature::Vision,

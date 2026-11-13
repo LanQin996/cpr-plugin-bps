@@ -34,18 +34,18 @@ pub async fn execute(
     replay: Arc<Mutex<ReplayCache>>,
     call: TypedCall<UpstreamAdapterRequest>,
 ) -> Result<TypedReply<Empty>, PluginFault> {
-    let index = call
-        .request
-        .adapter_id
-        .strip_prefix("bps-")
-        .and_then(|s| s.parse::<usize>().ok())
+    let declaration = config
+        .registration()
+        .adapters
+        .into_iter()
+        .find(|adapter| adapter.id == call.request.adapter_id)
         .ok_or_else(|| invalid("Unknown BPS adapter."))?;
     let account = config
         .accounts
-        .get(index)
+        .iter()
+        .find(|account| account.account_id == call.request.account_id)
         .ok_or_else(|| invalid("Unknown BPS adapter."))?;
-    if call.request.adapter_id != format!("bps-{index}")
-        || call.request.account_id != account.account_id
+    if !declaration.account_ids.contains(&call.request.account_id)
         || call.request.provider != BuiltinProvider::OpenAi
         || call.request.protocol != "openai"
         || !account.models.contains(&call.request.upstream_model)
@@ -59,7 +59,17 @@ pub async fn execute(
             "BPS requires expanded history instead of native continuation.",
         ));
     }
-    let (credentials, version) = auth::credentials(&call.host, &account.account_id).await?;
+    let (credentials, version) =
+        if account.credential_source == crate::config::CredentialSource::Host {
+            auth::host_credentials(
+                &call.host,
+                &account.account_id,
+                call.request.credential_revision,
+            )
+            .await?
+        } else {
+            auth::credentials(&call.host, &account.account_id).await?
+        };
     let session = call
         .request
         .headers

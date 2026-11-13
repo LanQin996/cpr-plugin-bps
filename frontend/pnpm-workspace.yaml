@@ -1,0 +1,4 @@
+managePackageManagerVersions: false
+onlyBuiltDependencies:
+  - '@codex-proxy/ui'
+  - esbuild

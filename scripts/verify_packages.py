@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def main():
-    packages = sorted((ROOT / "dist").glob("*.tar.gz"))
+    version = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))["version"]
+    packages = sorted((ROOT / "dist").glob(f"local.bps-{version}-*.tar.gz"))
     if not packages:
         raise SystemExit("No packages found in dist; build a package first.")
     for path in packages:
@@ -27,7 +28,8 @@ def main():
                 raw = archive.extractfile(name).read()
                 assert hashlib.sha256(raw).hexdigest() == expected, name
                 if name != manifest["main"]:
-                    assert raw == (ROOT / name).read_bytes(), f"Stale resource: {name}"
+                    source = ROOT / "frontend" / "dist" / name[4:] if name.startswith("web/") else ROOT / name
+                    assert raw == source.read_bytes(), f"Stale resource: {name}"
             binary = archive.extractfile(manifest["main"]).read()
             architecture = package["target"]["architecture"]
             if binary[:4] == b"\x7fELF":

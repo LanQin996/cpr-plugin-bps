@@ -164,7 +164,68 @@ pub async fn credentials(
     Ok((parse_credentials(&record.value)?, record.version))
 }
 
-async fn metadata<I: Serialize, O: DeserializeOwned>(
+pub(crate) async fn payload<I: Serialize, O: DeserializeOwned>(
+    host: &HostClient,
+    method: &str,
+    value: I,
+) -> Result<O, PluginFault> {
+    let reply = host
+        .call(
+            method,
+            json!({}),
+            serde_json::to_vec(&value)
+                .map_err(|_| invalid("Could not encode host account request."))?,
+        )
+        .await
+        .map_err(SessionError::into_plugin_fault)?;
+    if reply.result != json!({}) {
+        return Err(invalid("Invalid host account response."));
+    }
+    serde_json::from_slice(&reply.payload).map_err(|_| invalid("Invalid host account payload."))
+}
+
+pub async fn host_credentials(
+    host: &HostClient,
+    account_id: &str,
+    expected_revision: u64,
+) -> Result<(Credentials, u64), PluginFault> {
+    let credential: host::AuthCredential = payload(
+        host,
+        host::AUTH_GET,
+        host::AuthGetRequest {
+            account_id: account_id.into(),
+        },
+    )
+    .await?;
+    if credential.account_id != account_id
+        || credential.provider_id != "openai"
+        || credential.facts.authentication_kind != "oauth"
+    {
+        return Err(invalid(
+            "BPS host-account mode requires an OpenAI OAuth account.",
+        ));
+    }
+    if credential.credential_revision != expected_revision {
+        return Err(PluginFault::new(
+            ErrorCode::Conflict,
+            "Host OAuth credentials changed during this attempt. No BPS request was sent.",
+        ));
+    }
+    let mut document = Value::Object(credential.facts.material);
+    // 只使用所选账号的宿主凭据，不复制到插件私有状态，不调用独立登录或刷新
+    if let Some(expiry) = credential.facts.access_token_expires_at_ms {
+        document["expires_at"] = json!(expiry / 1000);
+    }
+    if let Some(id) = credential.facts.upstream_account_id {
+        document["account_id"] = json!(id);
+    }
+    Ok((
+        parse_credentials(&document)?,
+        credential.credential_revision,
+    ))
+}
+
+pub(crate) async fn metadata<I: Serialize, O: DeserializeOwned>(
     host: &HostClient,
     method: &str,
     value: I,
@@ -182,7 +243,7 @@ async fn metadata<I: Serialize, O: DeserializeOwned>(
     }
     serde_json::from_value(reply.result).map_err(|_| invalid("Invalid OAuth state response."))
 }
-async fn get(host: &HostClient, key: &str) -> Result<Option<StateRecord>, PluginFault> {
+pub(crate) async fn get(host: &HostClient, key: &str) -> Result<Option<StateRecord>, PluginFault> {
     let result: StateGetResult = metadata(
         host,
         host::STATE_GET,
@@ -194,7 +255,7 @@ async fn get(host: &HostClient, key: &str) -> Result<Option<StateRecord>, Plugin
     .await?;
     Ok(result.record)
 }
-async fn put(
+pub(crate) async fn put(
     host: &HostClient,
     key: &str,
     value: Value,
@@ -269,20 +330,45 @@ pub async fn command(
     {
         return Err(invalid("Unknown configured BPS account."));
     }
-    let host = &call.host;
+    if config.accounts.iter().any(|account| {
+        account.account_id == selected
+            && account.credential_source == crate::config::CredentialSource::Host
+    }) {
+        if call.request.name == "status" {
+            return reply("当前 BPS 接入复用宿主 OAuth，凭据刷新由宿主管理");
+        }
+        return Err(invalid(
+            "This BPS account uses host OAuth. Manage login in the host or detach BPS from the management page.",
+        ));
+    }
+    let oauth = match call.request.arguments.get("oauth") {
+        Some(CommandValue::String(raw)) => Some(raw.as_str()),
+        _ => None,
+    };
+    let result = perform(&call.host, selected, &call.request.name, oauth).await?;
+    reply(result["message"].as_str().unwrap_or("操作已完成"))
+}
+
+pub async fn perform(
+    host: &HostClient,
+    selected: &str,
+    action: &str,
+    oauth: Option<&str>,
+) -> Result<Value, PluginFault> {
     let credential_key = key("credentials", selected);
     let pending_key = key("pending", selected);
-    let stdout = match call.request.name.as_str() {
+    let result = match action {
         "status" => match get(host, &credential_key).await? {
-            None => "尚未配置 BPS OAuth".into(),
+            None => {
+                json!({"configured":false,"valid":false,"status":"signed_out","message":"尚未配置 BPS OAuth"})
+            }
             Some(record) => match parse_credentials(&record.value) {
-                Ok(credentials) => format!(
-                    "OAuth 可用；有效期 Unix 秒：{}；真实生成权限尚未验证",
-                    credentials
-                        .expires_at
-                        .map_or("未知".into(), |v| v.to_string())
-                ),
-                Err(_) => "OAuth 不可用或已过期，请重新授权".into(),
+                Ok(credentials) => {
+                    json!({"configured":true,"valid":true,"status":"authorized","expiresAt":credentials.expires_at,"message":"OAuth 已保存，真实生成权限尚未验证"})
+                }
+                Err(_) => {
+                    json!({"configured":true,"valid":false,"status":"expired","message":"OAuth 不可用或已过期，请重新授权"})
+                }
             },
         },
         "logout" => {
@@ -300,12 +386,10 @@ pub async fn command(
                     .await?;
                 }
             }
-            "已删除 BPS OAuth".into()
+            json!({"status":"signed_out","message":"已退出 BPS 登录"})
         }
         "import-oauth" => {
-            let Some(CommandValue::String(raw)) = call.request.arguments.get("oauth") else {
-                return Err(invalid("Provide BPS OAuth JSON with --oauth."));
-            };
+            let raw = oauth.ok_or_else(|| invalid("Provide BPS OAuth JSON."))?;
             if raw.len() > 48 * 1024 {
                 return Err(invalid("BPS OAuth document exceeds 48 KiB."));
             }
@@ -314,7 +398,7 @@ pub async fn command(
             parse_credentials(&value)?;
             let previous = get(host, &credential_key).await?;
             put(host, &credential_key, value, previous.map(|r| r.version)).await?;
-            "已导入 BPS OAuth；真实生成权限尚未验证".into()
+            json!({"status":"authorized","message":"已导入 BPS OAuth，真实生成权限尚未验证"})
         }
         "login-start" => {
             let previous = get(host, &pending_key).await?;
@@ -348,9 +432,10 @@ pub async fn command(
                 .transpose()?
                 .unwrap_or(5);
             put(host,&pending_key,json!({"device_auth_id":id,"user_code":code,"interval":interval,"expires_at":now()+900,"next_poll_at":now()+interval as i64,"credential_version":credentials.map(|r|r.version)}),previous.map(|r|r.version)).await?;
-            format!(
-                "打开 {AUTH_ORIGIN}/api/accounts/deviceauth/authorize?client_id={CLIENT_ID}\n输入设备码：{code}\n浏览器批准后执行 login-poll；至少间隔 {interval} 秒，15 分钟内有效"
-            )
+            let url =
+                format!("{AUTH_ORIGIN}/api/accounts/deviceauth/authorize?client_id={CLIENT_ID}");
+            json!({"status":"pending","authorizationUrl":url,"userCode":code,"interval":interval,"expiresAt":now()+900,
+                "message":format!("打开 {url}\n输入设备码：{code}\n浏览器批准后执行 login-poll，至少间隔 {interval} 秒，15 分钟内有效")})
         }
         "login-poll" => {
             let record = get(host, &pending_key)
@@ -367,7 +452,9 @@ pub async fn command(
                 .filter(|v| (1..=300).contains(v))
                 .ok_or_else(|| invalid("Invalid stored OAuth polling interval."))?;
             if pending["next_poll_at"].as_i64().is_some_and(|v| v > now()) {
-                return reply("尚未到轮询时间，请按 login-start 显示的间隔执行");
+                return Ok(
+                    json!({"status":"pending","retryAfterSeconds":pending["next_poll_at"].as_i64().unwrap_or(now())-now(),"message":"等待浏览器授权"}),
+                );
             }
             // 先 CAS 占用本次轮询，避免并发调用重复兑换同一授权码
             let mut reserved = pending.clone();
@@ -390,9 +477,9 @@ pub async fn command(
                 next["interval"] = json!(delay);
                 next["next_poll_at"] = json!(now() + delay);
                 put(host, &pending_key, next, Some(reserved_version)).await?;
-                return reply(&format!(
-                    "等待浏览器授权，请至少 {delay} 秒后再次执行 login-poll"
-                ));
+                return Ok(
+                    json!({"status":"pending","retryAfterSeconds":delay,"message":format!("等待浏览器授权，请至少 {delay} 秒后再次执行 login-poll")}),
+                );
             }
             if status != 200 {
                 return Err(oauth_error(status));
@@ -447,11 +534,31 @@ pub async fn command(
                 },
             )
             .await?;
-            "BPS OAuth 已保存；真实生成权限尚未验证".into()
+            json!({"status":"authorized","message":"BPS OAuth 已保存，真实生成权限尚未验证"})
         }
         _ => return Err(invalid("Unknown BPS command.")),
     };
-    reply(&stdout)
+    Ok(result)
+}
+
+pub(crate) async fn copy_credentials(
+    host: &HostClient,
+    from: &str,
+    to: &str,
+) -> Result<(), PluginFault> {
+    let source = get(host, &key("credentials", from))
+        .await?
+        .ok_or_else(|| invalid("BPS OAuth is not available."))?;
+    parse_credentials(&source.value)?;
+    let previous = get(host, &key("credentials", to)).await?;
+    put(
+        host,
+        &key("credentials", to),
+        source.value,
+        previous.map(|record| record.version),
+    )
+    .await?;
+    Ok(())
 }
 
 fn reply(stdout: &str) -> Result<TypedReply<CommandResult>, PluginFault> {

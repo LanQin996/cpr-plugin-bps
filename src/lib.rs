@@ -4,6 +4,7 @@ mod adapter;
 pub mod auth;
 mod config;
 pub mod events;
+mod management;
 pub mod protocol;
 
 pub use config::Config;
@@ -23,9 +24,19 @@ pub fn plugin(config: Config) -> Result<ComposedPlugin, AuthorError> {
     let registration = config.registration();
     let auth_config = config.clone();
     let auth_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+    let management_config = config.clone();
+    let management_lock = auth_lock.clone();
     let replay = std::sync::Arc::new(std::sync::Mutex::new(protocol::ReplayCache::default()));
     PluginBuilder::from_json(include_bytes!("../plugin.json"))?
         .model_catalog(config.catalog())?
+        .management(management::registration(), move |call| {
+            let config = management_config.clone();
+            let lock = management_lock.clone();
+            async move {
+                let _guard = lock.lock().await;
+                management::handle(&config, call).await
+            }
+        })?
         .command_line(auth::registration(), move |call| {
             let config = auth_config.clone();
             let lock = auth_lock.clone();

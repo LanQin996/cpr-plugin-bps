@@ -45,13 +45,20 @@ enum Scenario {
     Disconnected,
     Rejected,
     Cancelled,
+    Host,
+    HostChanged,
+    HostMany,
 }
 
 async fn run(scenario: Scenario) -> Vec<UpstreamAdapterEvent> {
     tokio::time::timeout(Duration::from_secs(10),async move {
         let mut child=Command::new(env!("CARGO_BIN_EXE_cpr-plugin-bps")).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn().unwrap();
         let mut writer=child.stdin.take().unwrap(); let mut reader=child.stdout.take().unwrap();
-        send(&mut writer,Message::Hello{handshake:Handshake{protocol_version:PROTOCOL_VERSION,artifact_sha256:"a".repeat(64),plugin_id:PLUGIN_ID.into(),instance_id:"test-instance".into(),generation:1,incarnation:"test-process".into(),configuration:json!({"accounts":[{"accountId":"acct1","models":["m"]}]}),contributes:manifest().unwrap().contributes}},vec![]).await;
+        let host_mode=matches!(scenario,Scenario::Host|Scenario::HostChanged|Scenario::HostMany);
+        let config=if scenario==Scenario::HostMany {
+            json!({"accounts":(0..32).map(|i|json!({"accountId":format!("acct{i}"),"models":["m"],"credentialSource":"host"})).collect::<Vec<_>>()})
+        }else{json!({"accounts":[{"accountId":"acct1","models":["m"],"credentialSource":if host_mode{"host"}else{"independent"}}]})};
+        send(&mut writer,Message::Hello{handshake:Handshake{protocol_version:PROTOCOL_VERSION,artifact_sha256:"a".repeat(64),plugin_id:PLUGIN_ID.into(),instance_id:"test-instance".into(),generation:1,incarnation:"test-process".into(),configuration:config,contributes:manifest().unwrap().contributes}},vec![]).await;
         assert!(matches!(read_frame(&mut reader).await.unwrap().message,Message::Ready{..}));
         let upstream=UpstreamAdapterRequest{adapter_id:"bps-0".into(),provider:BuiltinProvider::OpenAi,upstream_model:"m".into(),client_key_id:"key1".into(),account_id:"acct1".into(),credential_revision:1,protocol:"openai".into(),client_transport:"http_sse".into(),fast_mode:"default".into(),request_elapsed_ms:0,headers:vec![],continuation:None};
         let request=json!({"model":"public","input":"hello","stream":scenario!=Scenario::Json,"tools":[{"type":"function","name":"safe","parameters":{"type":"object"}}]});
@@ -76,11 +83,19 @@ async fn run(scenario: Scenario) -> Vec<UpstreamAdapterEvent> {
                 Message::Result{id:1,..}=>{},
                 Message::Callback{id,method,params,..}=>{
                     let (result,payload)=match method.as_str() {
-                        "host.state.get"=>(json!({"record":{"version":3,"schema_version":1,"value":{"access_token":"fixture-bps-token","account_id":"bps-account"}}}),vec![]),
+                        "host.state.get"=>{assert!(!host_mode,"Host credentials must not read independent OAuth state");(json!({"record":{"version":3,"schema_version":1,"value":{"access_token":"fixture-bps-token","account_id":"bps-account"}}}),vec![])},
+                        "host.auth.get"=>{
+                            assert!(host_mode);assert_eq!(params,json!({}));let request:Value=serde_json::from_slice(&frame.payload).unwrap();assert_eq!(request["account_id"],"acct1");
+                            (json!({}),json!({"account_id":"acct1","provider_id":"openai","credential_revision":if scenario==Scenario::HostChanged{2}else{1},"facts":{"name":"Existing","authentication_kind":"oauth","material":{"schema_version":1,"access_token":"native-host-fixture","refresh_token":"must-not-be-used-by-plugin"},"email":null,"upstream_user_id":null,"upstream_account_id":"native-account","plan_type":null,"has_refresh_token":true,"access_token_expires_at_ms":(cpr_plugin_bps::auth::now()+3600)*1000,"next_refresh_at_ms":null}}).to_string().into_bytes())
+                        }
                         "host.upstream.websocket.open"=>{
                             assert_eq!(params["path"],"basispoints/api/responses");
                             let query=params["query"].to_string(); assert!(!query.contains("fixture-bps-token"));
                             assert!(params["headers"].as_array().unwrap().iter().any(|header|header[0]=="sec-websocket-protocol"));
+                            if host_mode {
+                                let header=params["headers"].as_array().unwrap().iter().find(|header|header[0]=="authorization").unwrap();
+                                let bytes:Vec<u8>=serde_json::from_value(header[1].clone()).unwrap();assert_eq!(bytes,b"Bearer native-host-fixture");
+                            }
                             if scenario==Scenario::Rejected {(json!({"status":429,"http_version":"HTTP/1.1","headers":[],"stream":null,"trailers":[]}),json!({"error":{"code":"rate_limit_exceeded","message":"Limited"}}).to_string().into_bytes())}
                             else {(json!({"status":101,"http_version":"HTTP/1.1","headers":[],"stream":null,"trailers":[]}),vec![])}
                         }
@@ -112,12 +127,13 @@ async fn run(scenario: Scenario) -> Vec<UpstreamAdapterEvent> {
                     break;
                 }
                 Message::Cancelled{id:1} if scenario==Scenario::Cancelled=>break,
+                Message::Error{error,..} if scenario==Scenario::HostChanged=>{assert_eq!(error.code,gateway_plugin_sdk::ErrorCode::Conflict);break;},
                 Message::Error{error,..}=>panic!("Plugin fault: {}",error.message),
                 message=>panic!("Unexpected plugin frame: {message:?}"),
             }
         }
-        if scenario==Scenario::Rejected {assert_eq!(sent,0);} else {assert_eq!(sent,1);}
-        if !matches!(scenario,Scenario::Rejected|Scenario::Cancelled|Scenario::Disconnected) {assert_eq!(closed,1);}
+        if matches!(scenario,Scenario::Rejected|Scenario::HostChanged) {assert_eq!(sent,0);} else {assert_eq!(sent,1);}
+        if !matches!(scenario,Scenario::Rejected|Scenario::Cancelled|Scenario::Disconnected|Scenario::HostChanged) {assert_eq!(closed,1);}
         if scenario==Scenario::Cancelled {assert_eq!(reads,1);}
         send(&mut writer,Message::Shutdown,vec![]).await;
         assert!(child.wait().await.unwrap().success());
@@ -193,4 +209,23 @@ async fn native_ws_failure_disconnect_and_rejection_never_complete() {
 #[tokio::test]
 async fn cancellation_stops_pending_ws_read_without_replay() {
     run(Scenario::Cancelled).await;
+}
+
+#[tokio::test]
+async fn host_oauth_is_read_per_attempt_and_never_copied_or_refreshed_by_plugin() {
+    let events = run(Scenario::Host).await;
+    assert!(
+        events
+            .iter()
+            .flat_map(|event| &event.event.facts)
+            .any(|fact| matches!(fact, CanonicalEvent::Completed { .. }))
+    );
+    assert!(run(Scenario::HostChanged).await.is_empty());
+    let events = run(Scenario::HostMany).await;
+    assert!(
+        events
+            .iter()
+            .flat_map(|event| &event.event.facts)
+            .any(|fact| matches!(fact, CanonicalEvent::Completed { .. }))
+    );
 }

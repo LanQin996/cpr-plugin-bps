@@ -29,11 +29,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo test --locked
       - run: python scripts/package.py --target ${{ matrix.target }} --install-cli
       - run: python scripts/verify_packages.py
+      - if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: pnpm --dir frontend exec playwright install --with-deps chromium
+      - if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: pnpm --dir frontend test
       - uses: actions/upload-artifact@v4
         with:
           name: bps-${{ matrix.target }}

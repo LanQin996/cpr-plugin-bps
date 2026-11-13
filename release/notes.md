@@ -1,27 +1,39 @@
-## BPS 原生插件 v0.1.0
+## BPS 原生插件 v0.2.0
 
-纯 Rust 实现默认 BPS WebSocket 生成链路，不依赖 Go 或本地 HTTP 桥接服务。
+本版优先复用宿主已有账号，安装后无需重新登录、手写 JSON、填写账号 ID 或创建占位账号。
 
-- 独立设备授权、PKCE、OAuth 导入、状态检查和退出登录
-- Responses 文本、完整历史、HTTPS 图片输入
-- function/custom/namespace 工具、原生 update_plan 与隔离历史回放
-- 结构化输出校验、流式/非流式响应、Token 用量和连接生命周期管理
+- 空配置即可启用，从插件页面打开“BPS 账号管理”
+- 分组和单账号可同时多选，按并集启用，跨分组单选不受限制，重叠账号去重
+- 保存前显示最终生效列表与数量，保留两组独立选择，取消分组不清除单账号勾选
+- 沿用原账号代理、OAuth 和宿主刷新，不需要重新登录
+- 生成时读取所选账号当前凭据并核对版本，不复制 Token 到插件状态或替换宿主凭据
+- 调整或清空接入范围可恢复原通道，保留原账号和登录状态
+- 相同模型配置共用适配声明，支持最多 256 个账号
+- 独立 BPS 设备授权、OAuth 文件导入作为可选备用方式
+- 账号接入记录可恢复，重试不会重复创建已记录的账号
+- 保留 v0.1.0 账号映射、OAuth 和全部原生 BPS 协议功能
+- 使用官方 UI 组件、宿主主题和公开管理桥，包含明暗主题及窄屏验证
 
 ### 安装
 
 下载与 **Codex Proxy RS 宿主** 匹配的安装包及 `.sha256`：
 
-- Linux x86_64：`local.bps-0.1.0-x86_64-unknown-linux-gnu.tar.gz`
-- Linux ARM64：`local.bps-0.1.0-aarch64-unknown-linux-gnu.tar.gz`
+- Linux x86_64：`local.bps-0.2.0-x86_64-unknown-linux-gnu.tar.gz`
+- Linux ARM64：`local.bps-0.2.0-aarch64-unknown-linux-gnu.tar.gz`
 
 在宿主插件管理中上传安装包，或使用 GitHub 来源 `LanQin996/cpr-plugin-bps` 安装。GitHub 自动生成的 Source code 归档不是插件安装包。
 
-声明兼容宿主 `>=3.33.0, <4.0.0`，需要清单 v2、RPC v7 和 upstream_adapter v5。配置与登录命令见仓库 README。
+声明兼容宿主 `>=3.33.0, <4.0.0`，需要清单 v2、RPC v7、management v2 和 upstream_adapter v5。Linux 发行包需要 glibc 2.34+。
+
+从 v0.1.0 更新后选择并启用 v0.2.0，打开扩展页即可。尚未完成初次配置的实例使用 `{}` 保存并启用，再从页面接入账号。
 
 ### 当前边界
 
 - 自动测试使用模拟宿主和 BPS 数据，没有进行真实账号生成验收
-- 不自动刷新 OAuth；AT 到期后需重新授权或导入
+- 已有 Key 的分组权限不自动放宽，账号组按宿主常规权限管理维护
+- 分组按保存时成员展开，成员变化后需刷新并重新应用选择
+- 宿主 OAuth 的 BPS app/scope、账号及模型权限尚未实测，上游拒绝时保留原始原因
+- 独立 BPS OAuth 不自动刷新，宿主复用模式沿用宿主刷新机制
 - 不支持 previous_response_id，需要完整历史
 - legacy SSE、实验性 ARC 和图像中继托管未包含在此版本
 - 本次仅分发两个 Linux 平台，不提供 Windows 或 macOS 安装附件

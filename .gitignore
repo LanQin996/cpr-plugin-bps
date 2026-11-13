@@ -3,5 +3,9 @@
 /.references/
 /.tools/
 __pycache__/
+/frontend/node_modules/
+/frontend/dist/
+/frontend/test-results/
+/frontend/playwright-report/
 oauth*.json
 !oauth.example.json
