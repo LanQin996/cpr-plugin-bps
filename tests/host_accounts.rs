@@ -16,7 +16,7 @@ async fn send(writer: &mut (impl AsyncWrite + Unpin), message: Message, payload:
         .unwrap();
 }
 fn account() -> Value {
-    json!({"account_id":"native-account","provider_id":"openai","credential_revision":7,"name":"本体账号","email":"fixture@example.test","upstream_user_id":null,"upstream_account_id":null,"plan_type":null,"authentication_kind":"oauth","enabled":true,"credential_state":"ready","has_refresh_token":true,"access_token_expires_at_ms":null,"next_refresh_at_ms":null})
+    json!({"account_id":"native-account","provider_id":"openai","credential_revision":7,"name":"","email":"fixture@example.test","upstream_user_id":null,"upstream_account_id":null,"plan_type":null,"authentication_kind":"oauth","enabled":true,"credential_state":"ready","has_refresh_token":true,"access_token_expires_at_ms":null,"next_refresh_at_ms":null})
 }
 
 async fn run(detach: bool, group_mode: bool) {
@@ -28,8 +28,8 @@ async fn run(detach: bool, group_mode: bool) {
         send(&mut writer,Message::Hello{handshake:Handshake{protocol_version:PROTOCOL_VERSION,artifact_sha256:"a".repeat(64),plugin_id:PLUGIN_ID.into(),instance_id:"host-mode".into(),generation:1,incarnation:"host-mode-process".into(),configuration:config.clone(),contributes:manifest().unwrap().contributes}},vec![]).await;
         assert!(matches!(read_frame(&mut reader).await.unwrap().message,Message::Ready{..}));
         let mut bodies:BTreeMap<String,Option<Vec<u8>>>=BTreeMap::new();let mut updates=0;
-        let choice=if group_mode{json!({"groupIds":["group-a"],"accountIds":["b1","overlap"]})}else{json!({"accountId":"native-account"})};
-        for (id,method,path,body) in [(1,"GET","api/snapshot",None),(3,"POST",if group_mode{"api/accounts/selection"}else if detach{"api/accounts/detach"}else{"api/accounts/use-host"},Some(choice))] {
+        let choice=if group_mode{json!({"groupIds":["group-a"],"accountIds":["b1","overlap"]})}else if detach{json!({"accountId":"native-account"})}else{json!({"groupIds":[],"accountIds":["native-account"]})};
+        for (id,method,path,body) in [(1,"GET","api/snapshot",None),(3,"POST",if detach{"api/accounts/detach"}else{"api/accounts/selection"},Some(choice))] {
             let headers=vec![gateway_plugin_sdk::call::middleware::MiddlewareHeader{name:"authorization".into(),value:b"Bearer fixture-admin".to_vec()}];
             let request=ManagementRequest{method:method.into(),path:path.into(),query:String::new(),content_type:body.as_ref().map(|_|"application/json".into()),headers};
             let context=CallContext{request:None,call_id:id,instance_id:"host-mode".into(),generation:1,incarnation:"host-mode-process".into(),stage:Stage::Management,timeout_ms:5000,resource_stream:false,resource_scope_id:format!("scope-{id}"),request_id:None,attempt_id:None,account_id:None,credential_revision:None};
@@ -42,15 +42,15 @@ async fn run(detach: bool, group_mode: bool) {
                     Message::Callback{id,method,params,..}=>{
                         let (result,payload)=match method.as_str(){
                             "host.auth.list"=>{assert_eq!(params,json!({}));let mut accounts=vec![account()];if group_mode{for id in ["overlap","b1","b2"]{let mut item=account();item["account_id"]=json!(id);accounts.push(item);}}(json!({}),json!({"accounts":accounts,"next_cursor":null}).to_string().into_bytes())},
-                            "host.data.accounts.list"=>{
-                                let members=if group_mode{json!([{"account_id":"native-account","provider_id":"openai","name":"A","email":null,"group_ids":["group-a"],"enabled":true,"updated_at_ms":0},{"account_id":"overlap","provider_id":"openai","name":"AB","email":null,"group_ids":["group-a","group-b"],"enabled":true,"updated_at_ms":0},{"account_id":"b1","provider_id":"openai","name":"B1","email":null,"group_ids":["group-b"],"enabled":true,"updated_at_ms":0},{"account_id":"b2","provider_id":"openai","name":"B2","email":null,"group_ids":["group-b"],"enabled":true,"updated_at_ms":0}])}else{json!([])};
-                                (json!({}),json!({"schema_version":1,"accounts":members,"next_cursor":null}).to_string().into_bytes())
-                            },
                             "host.auth.get_runtime"=>{assert_eq!(params,json!({}));let data:Value=serde_json::from_slice(&frame.payload).unwrap();assert_eq!(data["account_id"],"native-account");(json!({}),account().to_string().into_bytes())},
                             "host.state.get"=>(json!({"record":null}),vec![]),
                             "host.http.dispatch"=>{
                                 let uri=params["uri"].as_str().unwrap();let data=if uri=="/api/admin/plugins/instances" {
                                     json!([{"id":"host-mode","name":"BPS","artifactSha256":"artifact","enabled":true,"configuration":config,"revision":1,"bindings":[]}])
+                                }else if uri.starts_with("/api/admin/accounts?") {
+                                    let mut items=vec![json!({"id":"native-account","name":"","email":"fixture@example.test","groups":if group_mode{json!([{"id":"group-a","name":"A","enabled":true}])}else{json!([])}})];
+                                    if group_mode {for (id,groups) in [("overlap",vec!["group-a","group-b"]),("b1",vec!["group-b"]),("b2",vec!["group-b"])]{items.push(json!({"id":id,"name":id,"email":null,"groups":groups.into_iter().map(|id|json!({"id":id,"name":id,"enabled":true})).collect::<Vec<_>>()}));}}
+                                    json!({"items":items,"page":{"totalPages":1}})
                                 }else if uri.starts_with("/api/admin/account-groups/options?") {
                                     json!({"items":[{"id":"group-a","name":"A","enabled":true},{"id":"group-b","name":"B","enabled":true}],"page":{"totalPages":1}})
                                 }else{
@@ -76,7 +76,8 @@ async fn run(detach: bool, group_mode: bool) {
                         let response:ManagementResponse=serde_json::from_value(result).unwrap();let data:Value=serde_json::from_slice(&frame.payload).unwrap();assert_eq!(response.status,200,"{}",data);
                         if method=="GET" {
                             if detach {assert_eq!(data["accounts"][0]["credentialSource"],"host");assert_eq!(data["accounts"][0]["auth"]["status"],"host_managed");assert_eq!(data["hostAccounts"][0]["id"],"native-account");}
-                            else {assert_eq!(data["hostAccounts"][0]["label"],"本体账号");assert_eq!(data["accounts"],json!([]));}
+                            else {assert_eq!(data["hostAccounts"][0]["label"],"fixture@example.test");assert_eq!(data["accounts"],json!([]));}
+                            assert_eq!(data["hostAccounts"][0]["groupIds"],if group_mode{json!(["group-a"])}else{json!([])});
                         }
                         break;
                     }

@@ -40,7 +40,6 @@ async fn import_from_empty_installation_creates_account_and_updates_only_its_ins
                     Message::Callback{id,method,params,..}=>{
                         let (result,payload)=match method.as_str(){
                             "host.auth.list"=>(json!({}),json!({"accounts":[],"next_cursor":null}).to_string().into_bytes()),
-                            "host.data.accounts.list"=>(json!({}),json!({"schema_version":1,"accounts":[],"next_cursor":null}).to_string().into_bytes()),
                             "host.state.get"=>(json!({"record":state.get(params["key"].as_str().unwrap())}),vec![]),
                             "host.state.put"=>{
                                 let key=params["key"].as_str().unwrap();assert_eq!(params["expected_version"],state.get(key).map(|r|r["version"].clone()).unwrap_or(Value::Null));
@@ -59,7 +58,7 @@ async fn import_from_empty_installation_creates_account_and_updates_only_its_ins
                                     assert_eq!(params["method"],"GET");
                                     // 第二次调用模拟第一次结果丢失，旧进程仍未刷新，发布重试不得再建号
                                     json!([{"id":"another-instance","name":"Other","configuration":{}},{"id":"manage-instance","name":"BPS","artifactSha256":"abc","enabled":true,"configuration":{},"revision":9,"bindings":[{"contribution":"local.bps.upstream-adapter","stage":"upstream","order":7,"failurePolicy":"reject","providerIds":[],"models":[],"clientKeyIds":[],"accountGroupIds":[],"identityBindings":[]}]}])
-                                }else if uri.starts_with("/api/admin/account-groups/options?") {
+                                }else if uri.starts_with("/api/admin/accounts?") || uri.starts_with("/api/admin/account-groups/options?") {
                                     json!({"items":[],"page":{"totalPages":0}})
                                 }else{
                                     assert_eq!(uri,"/api/admin/plugins/instances/update");let request:Value=serde_json::from_slice(&frame.payload).unwrap();assert_eq!(request["id"],"manage-instance");assert_eq!(request["instance"]["expectedRevision"],9);assert_eq!(request["instance"]["bindings"][0]["order"],7);

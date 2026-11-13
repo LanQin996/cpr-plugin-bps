@@ -3,6 +3,9 @@ export interface Account { id: string; label: string; models: string[]; credenti
 export interface HostAccount { id: string; label: string; email: string | null; enabled: boolean; state: string; groupIds: string[] }
 export interface HostGroup { id: string; name: string; enabled: boolean }
 export interface HostSelection { groupIds: string[]; accountIds: string[] }
+export function accountLabel(account: { id: string; label?: string | null; email?: string | null }): string {
+  return account.label?.trim() || account.email?.trim() || account.id
+}
 export interface Prompt { authorizationUrl: string; userCode: string; interval: number; expiresAt: number }
 export interface Onboarding { operationId: string; label: string; models: string[]; stage: string; prompt: Prompt | null; expiresAt: number }
 export interface Snapshot { accounts: Account[]; hostAccounts: HostAccount[]; hostGroups: HostGroup[]; hostSelection: HostSelection; defaultModel: string; onboarding: Onboarding | null }

@@ -120,7 +120,7 @@ async fn route(config: &Config, call: &TypedCall<ManagementRequest>) -> Result<V
             } else {
                 auth::perform(&call.host, &account.account_id, "status", None).await?
             };
-            accounts.push(json!({"id":account.account_id,"label":if account.label.is_empty(){host_accounts.iter().find(|item|item.account_id==account.account_id).map(|item|item.name.clone()).unwrap_or_else(||format!("BPS 账号 {}",index+1))}else{account.label.clone()},"models":account.models,"credentialSource":account.credential_source,"auth":status}));
+            accounts.push(json!({"id":account.account_id,"label":if account.label.is_empty(){host_accounts.iter().find(|item|item.account_id==account.account_id).map(selection::account_label).unwrap_or_else(||format!("BPS 账号 {}",index+1))}else{account.label.clone()},"models":account.models,"credentialSource":account.credential_source,"auth":status}));
         }
         let directory = selection::with_accounts(call, host_accounts).await?;
         return Ok(

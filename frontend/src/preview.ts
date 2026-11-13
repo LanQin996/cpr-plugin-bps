@@ -14,6 +14,8 @@ export function installPreview(): boolean {
     { id: 'overlap', label: '重叠账号', email: null, enabled: true, state: 'ready', groupIds: ['group-a', 'group-b'] },
     { id: 'b1', label: 'B1 账号', email: null, enabled: true, state: 'ready', groupIds: ['group-b'] },
     { id: 'b2', label: 'B2 账号', email: null, enabled: true, state: 'ready', groupIds: ['group-b'] },
+    { id: 'ungrouped-email', label: '', email: 'ungrouped@example.test', enabled: true, state: 'ready', groupIds: [] },
+    { id: 'ungrouped-id', label: '', email: null, enabled: true, state: 'ready', groupIds: [] },
   ]
   const hostGroups = [{ id: 'group-a', name: '分组 A', enabled: true }, { id: 'group-b', name: '分组 B', enabled: true }]
   let hostSelection: HostSelection = { groupIds: [], accountIds: [] }
