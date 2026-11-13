@@ -35,6 +35,8 @@ Issue #278 发布时的 `v3.14.0` 不等于当前插件合同。本插件没有�
 
 ## 安装和配置
 
+安装包从本仓库的 [GitHub Releases](https://github.com/LanQin996/cpr-plugin-bps/releases/latest) 下载，不是 Actions 附件或 GitHub 自动生成的 Source code。也可在宿主中选择 GitHub 来源 `LanQin996/cpr-plugin-bps` 安装。
+
 1. 在宿主创建专用 **OpenAI URL + Key** 占位账号，协议选择 Responses、HTTP transport。它只用于宿主的选号、ACL 和租约，不用于 BPS 认证。不要复用普通 OpenAI 生产账号。
 2. 占位账号可以使用固定目标 `https://bps.openai.com/basispoints/api/` 和非真实的占位 Key。不要对占位账号执行原生连通性测试或模型自动探测。
 3. 安装与宿主运行平台匹配的 `.tar.gz`，接受插件完整信任。源码目录和 `.exe` 不是安装包。
@@ -136,6 +138,16 @@ python scripts/package.py --target x86_64-unknown-linux-gnu --zig --install-cli
 `--zig` 使用 glibc 2.28 基线；输出在 `dist/`，包括 `.tar.gz` 和 `.sha256`。脚本不会安装插件到宿主，也不会修改宿主账号、启用配置或发布 Release。CI 配置提供三个平台的原生构建任务；本地交叉编译不等于已在对应系统运行验证。
 
 构建后可运行 `python scripts/verify_packages.py`，核对归档摘要、包内资源、二进制架构及其与当前默认 `target/` 构建产物的一致性。
+
+### 发布到 GitHub
+
+普通 main / PR 构建只做检查和上传 Actions 附件，不创建 Release。推送与 `Cargo.toml`、`plugin.json` 版本一致的 `v<version>` 标签，才会触发 `.github/workflows/release.yml`：
+
+1. 校验标签与源码版本，分别检查、测试和构建两个 Linux 平台
+2. 校验两个 `.tar.gz`、两个 `.sha256` 和包内架构、摘要
+3. 创建草稿并上传完整附件，全部成功后公开 Release
+
+无预发行后缀的标签发布为正式版并设置 Latest；含后缀的标签发布为预发行版。手动重跑时必须选择已有版本标签，不能选择 main。已公开版本不会被覆盖；只有未公开的草稿允许补传附件。发布说明位于 `release/notes.md`。
 
 ## 源码入口
 

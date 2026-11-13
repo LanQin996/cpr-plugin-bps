@@ -1,6 +1,7 @@
 name: Check and package
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -32,6 +33,7 @@ jobs:
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - run: cargo test --locked
       - run: python scripts/package.py --target ${{ matrix.target }} --install-cli
+      - run: python scripts/verify_packages.py
       - uses: actions/upload-artifact@v4
         with:
           name: bps-${{ matrix.target }}
