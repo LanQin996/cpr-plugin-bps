@@ -213,10 +213,9 @@ pub async fn apply(
     }
     next.host_selection = Some(selection);
     let next = Config::parse(serde_json::to_value(next).map_err(|_| invalid("无法保存接入范围"))?)?;
-    publication::save(config, &next, call).await?;
-    Ok(
+    super::publish(config, &next, call,
         json!({"status":"connected","effectiveAccountIds":effective,"message":"已按分组与单账号的并集更新 BPS 接入"}),
-    )
+    ).await
 }
 
 pub fn saved(config: &Config) -> HostSelection {

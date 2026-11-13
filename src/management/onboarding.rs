@@ -313,10 +313,13 @@ async fn finish(
         credential_source: crate::config::CredentialSource::Independent,
     });
     let next = Config::parse(serde_json::to_value(next).map_err(|_| invalid("无法构造账号配置"))?)?;
-    publication::save(config, &next, call).await?;
-    Ok(
-        json!({"status":"authorized","accountId":account_id,"message":"账号已授权并接入，宿主正在刷新插件页面"}),
+    super::publish(
+        config,
+        &next,
+        call,
+        json!({"status":"authorized","accountId":account_id,"message":"账号已授权并接入"}),
     )
+    .await
 }
 
 async fn payload<I: Serialize, O: DeserializeOwned>(

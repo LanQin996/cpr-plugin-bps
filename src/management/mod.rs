@@ -104,29 +104,54 @@ async fn route(config: &Config, call: &TypedCall<ManagementRequest>) -> Result<V
         if !call.payload.is_empty() {
             return Err(invalid("状态查询不能包含正文"));
         }
-        let mut accounts = vec![];
-        let host_accounts = host_accounts(&call.host).await?;
-        for (index, account) in config.accounts.iter().enumerate() {
-            let status = if account.credential_source == CredentialSource::Host {
-                match host_accounts
-                    .iter()
-                    .find(|item| item.account_id == account.account_id)
-                {
-                    Some(item) => host_status(item),
-                    None => {
-                        json!({"configured":false,"valid":false,"status":"unavailable","message":"宿主账号已删除或认证方式发生变化"})
-                    }
-                }
-            } else {
-                auth::perform(&call.host, &account.account_id, "status", None).await?
-            };
-            accounts.push(json!({"id":account.account_id,"label":if account.label.is_empty(){host_accounts.iter().find(|item|item.account_id==account.account_id).map(selection::account_label).unwrap_or_else(||format!("BPS 账号 {}",index+1))}else{account.label.clone()},"models":account.models,"credentialSource":account.credential_source,"auth":status}));
-        }
-        let directory = selection::with_accounts(call, host_accounts).await?;
-        return Ok(
-            json!({"accounts":accounts,"hostAccounts":directory.accounts,"hostGroups":directory.groups,"hostSelection":selection::saved(config),"defaultModel":DEFAULT_MODEL,"onboarding":onboarding::snapshot(config,&call.host).await?}),
-        );
+        return snapshot(config, call).await;
     }
+    post(config, call).await
+}
+
+async fn snapshot(
+    config: &Config,
+    call: &TypedCall<ManagementRequest>,
+) -> Result<Value, PluginFault> {
+    let mut accounts = vec![];
+    let host_accounts = host_accounts(&call.host).await?;
+    for (index, account) in config.accounts.iter().enumerate() {
+        let status = if account.credential_source == CredentialSource::Host {
+            match host_accounts
+                .iter()
+                .find(|item| item.account_id == account.account_id)
+            {
+                Some(item) => host_status(item),
+                None => {
+                    json!({"configured":false,"valid":false,"status":"unavailable","message":"宿主账号已删除或认证方式发生变化"})
+                }
+            }
+        } else {
+            auth::perform(&call.host, &account.account_id, "status", None).await?
+        };
+        accounts.push(json!({"id":account.account_id,"label":if account.label.is_empty(){host_accounts.iter().find(|item|item.account_id==account.account_id).map(selection::account_label).unwrap_or_else(||format!("BPS 账号 {}",index+1))}else{account.label.clone()},"models":account.models,"credentialSource":account.credential_source,"auth":status}));
+    }
+    let directory = selection::with_accounts(call, host_accounts).await?;
+    Ok(
+        json!({"accounts":accounts,"hostAccounts":directory.accounts,"hostGroups":directory.groups,"hostSelection":selection::saved(config),"defaultModel":DEFAULT_MODEL,"onboarding":onboarding::snapshot(config,&call.host).await?}),
+    )
+}
+
+// 在发布前读取新配置的页面快照。发布成功后，旧页面 target 已失效，不能再请求它。
+async fn publish(
+    config: &Config,
+    next: &Config,
+    call: &TypedCall<ManagementRequest>,
+    mut reply: Value,
+) -> Result<Value, PluginFault> {
+    let snapshot = snapshot(next, call).await?;
+    let changed = publication::save(config, next, call).await?;
+    reply["reloadRequired"] = json!(changed);
+    reply["snapshot"] = snapshot;
+    Ok(reply)
+}
+
+async fn post(config: &Config, call: &TypedCall<ManagementRequest>) -> Result<Value, PluginFault> {
     if call.request.method != "POST"
         || call.request.content_type.as_deref() != Some("application/json")
     {
@@ -191,8 +216,13 @@ async fn route(config: &Config, call: &TypedCall<ManagementRequest>) -> Result<V
             let next = Config::parse(
                 serde_json::to_value(next).map_err(|_| invalid("无法保存宿主账号接入"))?,
             )?;
-            publication::save(config, &next, call).await?;
-            Ok(json!({"status":"connected","message":"已复用宿主账号，未修改登录凭据"}))
+            publish(
+                config,
+                &next,
+                call,
+                json!({"status":"connected","message":"已复用宿主账号，未修改登录凭据"}),
+            )
+            .await
         }
         "api/accounts/detach" => {
             let id = selected(config, &body)?;
@@ -204,8 +234,7 @@ async fn route(config: &Config, call: &TypedCall<ManagementRequest>) -> Result<V
                 selection.account_ids.retain(|account| account != id);
             }
             next.accounts.retain(|account| account.account_id != id);
-            publication::save(config, &next, call).await?;
-            Ok(json!({"status":"detached","message":"已取消 BPS 接入，宿主账号及登录状态保持不变"}))
+            publish(config, &next, call, json!({"status":"detached","message":"已取消 BPS 接入，宿主账号及登录状态保持不变"})).await
         }
         "api/onboarding/start" => onboarding::start(config, call, &body, false).await,
         "api/onboarding/import" => onboarding::start(config, call, &body, true).await,
@@ -223,8 +252,13 @@ async fn route(config: &Config, call: &TypedCall<ManagementRequest>) -> Result<V
             let next = Config::parse(
                 serde_json::to_value(next).map_err(|_| invalid("无法保存模型配置"))?,
             )?;
-            publication::save(config, &next, call).await?;
-            Ok(json!({"status":"saved","message":"模型已保存"}))
+            publish(
+                config,
+                &next,
+                call,
+                json!({"status":"saved","message":"模型已保存"}),
+            )
+            .await
         }
         path => {
             let id = selected(config, &body)?;

@@ -9,7 +9,8 @@ export function accountLabel(account: { id: string; label?: string | null; email
 export interface Prompt { authorizationUrl: string; userCode: string; interval: number; expiresAt: number }
 export interface Onboarding { operationId: string; label: string; models: string[]; stage: string; prompt: Prompt | null; expiresAt: number }
 export interface Snapshot { accounts: Account[]; hostAccounts: HostAccount[]; hostGroups: HostGroup[]; hostSelection: HostSelection; defaultModel: string; onboarding: Onboarding | null }
-export interface AuthReply { status: string; message?: string; retryAfterSeconds?: number }
+export interface MutationReply { reloadRequired?: boolean; snapshot?: Snapshot }
+export interface AuthReply extends MutationReply { status: string; message?: string; retryAfterSeconds?: number }
 export interface Bridge {
   version: number
   request(input: { method: string; path: string; contentType?: string; body?: string }): Promise<{ status: number; contentType: string; body: ArrayBuffer }>

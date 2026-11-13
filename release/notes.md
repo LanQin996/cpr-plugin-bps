@@ -1,6 +1,15 @@
-## BPS 原生插件 v0.2.2
+## BPS 原生插件 v0.2.3
 
-修复生成请求在出站前被宿主拒绝为 `400 invalid_request` 的 WebSocket 握手故障。
+修复点击保存后误报“插件页面版本已变更，正在刷新”的问题。旧版已保存成功，却继续用失效的页面版本读取状态，触发宿主 409 提示。
+
+- 保存响应直接返回新配置的页面快照，模型、分组选择和独立账号接入均不再请求旧页面地址
+- 未更改配置时不发布新版本，重复保存不会使页面失效
+- 实际修改配置后立即显示保存成功及新状态，停止旧页面操作；继续管理前点击宿主页头的刷新按钮
+- 当前宿主公开管理桥没有页面刷新能力，插件不使用私有消息或跨窗 DOM 操作
+- 保留真实的保存失败及并发冲突，不将任意 409 当成成功
+- 增加真实插件会话的幂等、并发冲突和浏览器页面版本失效回归测试
+
+以下为保留的 v0.2.2 WebSocket 握手修复：
 
 - 移除宿主受管 WebSocket 禁止的 `Sec-WebSocket-Protocol` 头
 - 使用 BPS 已验证支持的 Authorization 认证，继续沿用宿主代理、TLS、取消和资源回收
@@ -30,14 +39,14 @@
 
 下载与 **Codex Proxy RS 宿主** 匹配的安装包及 `.sha256`：
 
-- Linux x86_64：`local.bps-0.2.2-x86_64-unknown-linux-gnu.tar.gz`
-- Linux ARM64：`local.bps-0.2.2-aarch64-unknown-linux-gnu.tar.gz`
+- Linux x86_64：`local.bps-0.2.3-x86_64-unknown-linux-gnu.tar.gz`
+- Linux ARM64：`local.bps-0.2.3-aarch64-unknown-linux-gnu.tar.gz`
 
 在宿主插件管理中上传安装包，或使用 GitHub 来源 `LanQin996/cpr-plugin-bps` 安装。GitHub 自动生成的 Source code 归档不是插件安装包。
 
 声明兼容宿主 `>=3.33.0, <4.0.0`，需要清单 v2、RPC v7、management v2 和 upstream_adapter v5。Linux 发行包需要 glibc 2.34+。
 
-更新后选择并启用 v0.2.2，现有账号、分组选择和模型设置保留，无需重新登录。
+更新后选择并启用 v0.2.3，现有账号、分组选择和模型设置保留，无需重新登录。
 
 ### 当前边界
 

@@ -19,17 +19,17 @@ fn account() -> Value {
     json!({"account_id":"native-account","provider_id":"openai","credential_revision":7,"name":"","email":"fixture@example.test","upstream_user_id":null,"upstream_account_id":null,"plan_type":null,"authentication_kind":"oauth","enabled":true,"credential_state":"ready","has_refresh_token":true,"access_token_expires_at_ms":null,"next_refresh_at_ms":null})
 }
 
-async fn run(detach: bool, group_mode: bool) {
+async fn run(detach: bool, group_mode: bool, noop: bool, conflict: bool) {
     tokio::time::timeout(Duration::from_secs(10),async move {
         let mut child=Command::new(env!("CARGO_BIN_EXE_cpr-plugin-bps")).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn().unwrap();
         let mut writer=child.stdin.take().unwrap();let mut reader=child.stdout.take().unwrap();
         let native=json!({"accountId":"native-account","models":["m"],"credentialSource":"host"});
-        let config=if detach{json!({"accounts":[native]})}else{json!({})};
+        let config=if detach || noop{json!({"accounts":[native]})}else{json!({})};
         send(&mut writer,Message::Hello{handshake:Handshake{protocol_version:PROTOCOL_VERSION,artifact_sha256:"a".repeat(64),plugin_id:PLUGIN_ID.into(),instance_id:"host-mode".into(),generation:1,incarnation:"host-mode-process".into(),configuration:config.clone(),contributes:manifest().unwrap().contributes}},vec![]).await;
         assert!(matches!(read_frame(&mut reader).await.unwrap().message,Message::Ready{..}));
         let mut bodies:BTreeMap<String,Option<Vec<u8>>>=BTreeMap::new();let mut updates=0;
-        let choice=if group_mode{json!({"groupIds":["group-a"],"accountIds":["b1","overlap"]})}else if detach{json!({"accountId":"native-account"})}else{json!({"groupIds":[],"accountIds":["native-account"]})};
-        for (id,method,path,body) in [(1,"GET","api/snapshot",None),(3,"POST",if detach{"api/accounts/detach"}else{"api/accounts/selection"},Some(choice))] {
+        let choice=if noop{json!({"accountId":"native-account","models":["m"]})}else if group_mode{json!({"groupIds":["group-a"],"accountIds":["b1","overlap"]})}else if detach{json!({"accountId":"native-account"})}else{json!({"groupIds":[],"accountIds":["native-account"]})};
+        for (id,method,path,body) in [(1,"GET","api/snapshot",None),(3,"POST",if noop{"api/models"}else if detach{"api/accounts/detach"}else{"api/accounts/selection"},Some(choice))] {
             let headers=vec![gateway_plugin_sdk::call::middleware::MiddlewareHeader{name:"authorization".into(),value:b"Bearer fixture-admin".to_vec()}];
             let request=ManagementRequest{method:method.into(),path:path.into(),query:String::new(),content_type:body.as_ref().map(|_|"application/json".into()),headers};
             let context=CallContext{request:None,call_id:id,instance_id:"host-mode".into(),generation:1,incarnation:"host-mode-process".into(),stage:Stage::Management,timeout_ms:5000,resource_stream:false,resource_scope_id:format!("scope-{id}"),request_id:None,attempt_id:None,account_id:None,credential_revision:None};
@@ -45,8 +45,10 @@ async fn run(detach: bool, group_mode: bool) {
                             "host.auth.get_runtime"=>{assert_eq!(params,json!({}));let data:Value=serde_json::from_slice(&frame.payload).unwrap();assert_eq!(data["account_id"],"native-account");(json!({}),account().to_string().into_bytes())},
                             "host.state.get"=>(json!({"record":null}),vec![]),
                             "host.http.dispatch"=>{
+                                assert_eq!(updates,0,"No management reads after publishing a new revision");
                                 let uri=params["uri"].as_str().unwrap();let data=if uri=="/api/admin/plugins/instances" {
-                                    json!([{"id":"host-mode","name":"BPS","artifactSha256":"artifact","enabled":true,"configuration":config,"revision":1,"bindings":[]}])
+                                    let mut current=config.clone();if conflict{current["accounts"][0]["models"]=json!(["changed-elsewhere"]);}
+                                    json!([{"id":"host-mode","name":"BPS","artifactSha256":"artifact","enabled":true,"configuration":current,"revision":1,"bindings":[]}])
                                 }else if uri.starts_with("/api/admin/accounts?") {
                                     let mut items=vec![json!({"id":"native-account","name":"","email":"fixture@example.test","groups":if group_mode{json!([{"id":"group-a","name":"A","enabled":true}])}else{json!([])}})];
                                     if group_mode {for (id,groups) in [("overlap",vec!["group-a","group-b"]),("b1",vec!["group-b"]),("b2",vec!["group-b"])]{items.push(json!({"id":id,"name":id,"email":null,"groups":groups.into_iter().map(|id|json!({"id":id,"name":id,"enabled":true})).collect::<Vec<_>>()}));}}
@@ -73,12 +75,14 @@ async fn run(detach: bool, group_mode: bool) {
                         send(&mut writer,Message::Result{id,result},payload).await;
                     }
                     Message::Result{result,..}=>{
-                        let response:ManagementResponse=serde_json::from_value(result).unwrap();let data:Value=serde_json::from_slice(&frame.payload).unwrap();assert_eq!(response.status,200,"{}",data);
+                        let response:ManagementResponse=serde_json::from_value(result).unwrap();let data:Value=serde_json::from_slice(&frame.payload).unwrap();
+                        if method=="POST" && conflict {assert_eq!(response.status,409);assert!(data.get("snapshot").is_none());break;}
+                        assert_eq!(response.status,200,"{}",data);
                         if method=="GET" {
-                            if detach {assert_eq!(data["accounts"][0]["credentialSource"],"host");assert_eq!(data["accounts"][0]["auth"]["status"],"host_managed");assert_eq!(data["hostAccounts"][0]["id"],"native-account");}
+                            if detach || noop {assert_eq!(data["accounts"][0]["credentialSource"],"host");assert_eq!(data["accounts"][0]["auth"]["status"],"host_managed");assert_eq!(data["hostAccounts"][0]["id"],"native-account");}
                             else {assert_eq!(data["hostAccounts"][0]["label"],"fixture@example.test");assert_eq!(data["accounts"],json!([]));}
                             assert_eq!(data["hostAccounts"][0]["groupIds"],if group_mode{json!(["group-a"])}else{json!([])});
-                        }
+                        }else{assert_eq!(data["reloadRequired"],!noop);assert!(data["snapshot"]["accounts"].is_array());if noop{assert_eq!(data["snapshot"]["accounts"][0]["models"],json!(["m"]));}else if detach{assert_eq!(data["snapshot"]["accounts"],json!([]));}else{assert_eq!(data["snapshot"]["accounts"].as_array().unwrap().len(),if group_mode{3}else{1});}}
                         break;
                     }
                     Message::Error{error,..}=>panic!("Host account management failed: {}",error.message),
@@ -86,20 +90,30 @@ async fn run(detach: bool, group_mode: bool) {
                 }
             }
         }
-        assert_eq!(updates,1);send(&mut writer,Message::Shutdown,vec![]).await;assert!(child.wait().await.unwrap().success());
+        assert_eq!(updates,if noop{0}else{1});send(&mut writer,Message::Shutdown,vec![]).await;assert!(child.wait().await.unwrap().success());
     }).await.expect("Host account fixture timed out");
 }
 
 #[tokio::test]
 async fn host_account_can_be_attached_without_login_or_copying_tokens() {
-    run(false, false).await;
+    run(false, false, false, false).await;
 }
 #[tokio::test]
 async fn detaching_restores_native_execution_without_logging_out_host_account() {
-    run(true, false).await;
+    run(true, false, false, false).await;
 }
 
 #[tokio::test]
 async fn group_and_individual_union_is_recomputed_by_backend_before_saving() {
-    run(false, true).await;
+    run(false, true, false, false).await;
+}
+
+#[tokio::test]
+async fn saving_unchanged_models_does_not_publish_a_new_revision() {
+    run(false, false, true, false).await;
+}
+
+#[tokio::test]
+async fn unchanged_models_still_check_for_concurrent_configuration_changes() {
+    run(false, false, true, true).await;
 }

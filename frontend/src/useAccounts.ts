@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { operationId, request } from './api'
-import type { Account, AuthReply, HostAccount, Onboarding, Prompt, Snapshot } from './api'
+import type { Account, AuthReply, HostAccount, MutationReply, Onboarding, Prompt, Snapshot } from './api'
 
 export function useAccounts() {
   const snapshot = ref<Snapshot>({ accounts: [], hostAccounts: [], hostGroups: [], hostSelection: { groupIds: [], accountIds: [] }, defaultModel: 'gpt-6-astra', onboarding: null })
@@ -11,7 +11,7 @@ export function useAccounts() {
   function toggleGroup(id: string, checked: boolean) { selectedGroups.value = checked ? [...new Set([...selectedGroups.value, id])] : selectedGroups.value.filter(value => value !== id) }
   function toggleAccount(id: string, checked: boolean) { selectedAccounts.value = checked ? [...new Set([...selectedAccounts.value, id])] : selectedAccounts.value.filter(value => value !== id) }
   function clearSelection() { selectedGroups.value = []; selectedAccounts.value = [] }
-  const loading = ref(true), busy = ref(false), error = ref(''), notice = ref('')
+  const loading = ref(true), busy = ref(false), error = ref(''), notice = ref(''), reloadRequired = ref(false)
   const dialog = ref(false), modelsDialog = ref(false), selected = ref<Account | null>(null)
   const mode = ref<'login' | 'import'>('login'), label = ref(''), modelsText = ref('gpt-6-astra')
   const prompt = ref<Prompt | null>(null), setup = ref<Onboarding | null>(null), stage = ref('')
@@ -23,6 +23,7 @@ export function useAccounts() {
   const models = () => Array.from(new Set(modelsText.value.split(/[\s,，]+/).map(value => value.trim()).filter(Boolean)))
   function stop() { if (timer) clearTimeout(timer); timer = undefined }
   async function refresh() {
+    if (reloadRequired.value || busy.value) return
     loading.value = true
     try {
       const value = await request<Snapshot>('GET', 'api/snapshot')
@@ -30,6 +31,15 @@ export function useAccounts() {
       if (alive) { snapshot.value = value; error.value = '' }
     } catch (failure) { if (alive) error.value = message(failure) }
     finally { if (alive) loading.value = false }
+  }
+  async function saved(result: MutationReply) {
+    if (result.snapshot) snapshot.value = result.snapshot
+    reloadRequired.value = result.reloadRequired === true
+    // 更新实例配置会使当前宿主桥失效，直接使用保存响应中的快照。
+    if (!result.snapshot && !reloadRequired.value) {
+      const value = await request<Snapshot>('GET', 'api/snapshot')
+      if (alive) snapshot.value = value
+    }
   }
   function open(account: Account | null = null, method: 'login' | 'import' = 'login') {
     epoch++; stop(); selected.value = account; mode.value = method; prompt.value = null; setup.value = null
@@ -48,7 +58,7 @@ export function useAccounts() {
       if (result.status === 'authorized') {
         notice.value = adding.value ? '账号已授权并自动接入' : '账号授权已更新'
         dialog.value = false
-        await refresh()
+        await saved(result)
       } else { queue(result.retryAfterSeconds ?? prompt.value?.interval ?? 5) }
     } catch (failure) { if (alive && current === epoch) dialogError.value = message(failure) }
     finally { if (alive) busy.value = false }
@@ -59,7 +69,7 @@ export function useAccounts() {
       if (adding.value) {
         const result = await request<Onboarding & AuthReply>('POST', 'api/onboarding/start', { operationId: operation, label: label.value, models: models() })
         if (!alive || current !== epoch) return
-        if (result.status === 'authorized') { dialog.value = false; notice.value = '账号已接入'; await refresh(); return }
+        if (result.status === 'authorized') { dialog.value = false; notice.value = '账号已接入'; await saved(result); return }
         setup.value = result; prompt.value = result.prompt; stage.value = result.stage
       } else {
         const result = await request<Prompt>('POST', 'api/auth/start', { accountId: selected.value?.id })
@@ -95,7 +105,7 @@ export function useAccounts() {
       const result = await request<AuthReply>('POST', adding.value ? 'api/onboarding/import' : 'api/auth/import', adding.value ? { operationId: operation, label: label.value, models: models(), oauth: fileContent.value } : { accountId: selected.value?.id, oauth: fileContent.value })
       if (!alive || current !== epoch) return
       if (result.status !== 'authorized') throw new Error('账号接入尚未完成，请检查授权状态')
-      dialog.value = false; notice.value = 'OAuth 已导入并接入'; await refresh()
+      dialog.value = false; notice.value = 'OAuth 已导入并接入'; await saved(result)
     } catch (failure) { if (alive && current === epoch) dialogError.value = message(failure) }
     finally { fileContent.value = ''; if (alive) busy.value = false }
   }
@@ -111,22 +121,22 @@ export function useAccounts() {
   }
   async function logout(account: Account) {
     busy.value = true; error.value = ''
-    try { await request('POST', 'api/auth/logout', { accountId: account.id }); if (alive) { notice.value = '已退出登录'; await refresh() } }
+    try { const result = await request<AuthReply>('POST', 'api/auth/logout', { accountId: account.id }); if (alive) { notice.value = '已退出登录'; await saved(result) } }
     catch (failure) { if (alive) error.value = message(failure) }
     finally { if (alive) busy.value = false }
   }
   async function saveSelection() {
     busy.value = true; error.value = ''
     try {
-      await request('POST', 'api/accounts/selection', { groupIds: selectedGroups.value, accountIds: selectedAccounts.value })
-      if (alive) { hostDialog.value = false; notice.value = `已按分组与单账号的并集接入 ${effectiveAccounts.value.length} 个账号`; await refresh() }
+      const result = await request<MutationReply>('POST', 'api/accounts/selection', { groupIds: selectedGroups.value, accountIds: selectedAccounts.value })
+      if (alive) { hostDialog.value = false; await saved(result); notice.value = `已按分组与单账号的并集接入 ${snapshot.value.accounts.filter(account => account.credentialSource === 'host').length} 个账号` }
     } catch (failure) { if (alive) error.value = message(failure) }
     finally { if (alive) busy.value = false }
   }
   function editModels(account: Account) { selected.value = account; modelsText.value = account.models.join('\n'); dialogError.value = ''; modelsDialog.value = true }
   async function saveModels() {
     busy.value = true; dialogError.value = ''
-    try { await request('POST', 'api/models', { accountId: selected.value?.id, models: models() }); if (alive) { modelsDialog.value = false; notice.value = '模型已保存'; await refresh() } }
+    try { const result = await request<MutationReply>('POST', 'api/models', { accountId: selected.value?.id, models: models() }); if (alive) { modelsDialog.value = false; await saved(result); notice.value = '模型已保存' } }
     catch (failure) { if (alive) dialogError.value = message(failure) }
     finally { if (alive) busy.value = false }
   }
@@ -135,6 +145,6 @@ export function useAccounts() {
   watch(mode, () => { fileContent.value = ''; fileName.value = ''; dialogError.value = '' })
   onMounted(refresh)
   onBeforeUnmount(() => { alive = false; epoch++; stop(); fileContent.value = '' })
-  return { snapshot, loading, busy, error, notice, dialog, modelsDialog, hostDialog, selectedGroups, selectedAccounts, effectiveAccounts, byGroup, toggleGroup, toggleAccount, clearSelection, saveSelection, selected, adding, mode, label, modelsText, prompt, setup, stage, expired, fileName, fileContent, dialogError, refresh, open, resume, poll, login, readFile, importFile, openAuthorization, copyCode, logout, editModels, saveModels }
+  return { snapshot, loading, busy, reloadRequired, error, notice, dialog, modelsDialog, hostDialog, selectedGroups, selectedAccounts, effectiveAccounts, byGroup, toggleGroup, toggleAccount, clearSelection, saveSelection, selected, adding, mode, label, modelsText, prompt, setup, stage, expired, fileName, fileContent, dialogError, refresh, open, resume, poll, login, readFile, importFile, openAuthorization, copyCode, logout, editModels, saveModels }
 }
 function message(value: unknown) { return value instanceof Error ? value.message : '无法完成当前账号操作' }

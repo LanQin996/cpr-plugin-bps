@@ -1,5 +1,68 @@
 import { expect, test } from '@playwright/test'
 
+test('published models use the save response without requesting the stale target', async ({ page }) => {
+  const staleRequests: string[] = []
+  page.on('console', message => { if (message.text().includes('Stale management target')) staleRequests.push(message.text()) })
+  await page.goto('/?populated=1&revision=1')
+  await page.getByRole('button', { name: '模型设置', exact: true }).click()
+  await page.getByRole('textbox', { name: '模型 ID，每行一个', exact: true }).fill('gpt-6.1-sol')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(page.getByText('模型已保存', { exact: true })).toBeVisible()
+  await expect(page.getByText('gpt-6.1-sol', { exact: true })).toBeVisible()
+  await expect(page.getByText('设置已保存并生效。继续管理前，请点击宿主页面右上角的刷新按钮。', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '刷新账号状态', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '模型设置', exact: true })).toBeDisabled()
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  expect(staleRequests).toEqual([])
+})
+
+test('unchanged models can be saved repeatedly without invalidating the page', async ({ page }) => {
+  await page.goto('/?populated=1&revision=1')
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.getByRole('button', { name: '模型设置', exact: true }).click()
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '刷新账号状态', exact: true })).toBeEnabled()
+  }
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(page.getByText('设置已保存并生效。继续管理前，请点击宿主页面右上角的刷新按钮。', { exact: true })).toHaveCount(0)
+})
+
+test('a real save conflict stays an error and does not lock the page as saved', async ({ page }) => {
+  await page.goto('/?populated=1&revision=1&save-error=1')
+  await page.getByRole('button', { name: '模型设置', exact: true }).click()
+  await page.getByRole('textbox', { name: '模型 ID，每行一个', exact: true }).fill('gpt-6.1-sol')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('配置保存冲突，请刷新后重试')
+  await expect(page.getByRole('button', { name: '保存', exact: true })).toBeEnabled()
+  await expect(page.getByText('模型已保存', { exact: true })).toHaveCount(0)
+})
+
+test('selection publication displays the saved union without reading a stale snapshot', async ({ page }) => {
+  await page.goto('/?revision=1')
+  await page.getByRole('button', { name: '选择分组和账号', exact: true }).click()
+  await page.getByRole('checkbox', { name: '分组 A', exact: true }).locator('..').click()
+  await page.getByRole('button', { name: '应用选择（2）', exact: true }).click()
+  await expect(page.getByText('已按分组与单账号的并集接入 2 个账号', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '宿主已有账号', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '选择分组和账号', exact: true })).toBeDisabled()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+})
+
+test('device onboarding publication stops polling the invalidated session', async ({ page }) => {
+  const staleRequests: string[] = []
+  page.on('console', message => { if (message.text().includes('Stale management target')) staleRequests.push(message.text()) })
+  await page.goto('/?revision=1')
+  await page.getByRole('button', { name: '也可以使用独立 BPS 授权或导入文件', exact: true }).click()
+  await page.getByRole('button', { name: '获取设备码', exact: true }).click()
+  await expect(page.getByText('账号已授权并自动接入', { exact: true })).toBeVisible({ timeout: 10000 })
+  await expect(page.getByRole('button', { name: '刷新账号状态', exact: true })).toBeDisabled()
+  await page.waitForTimeout(1200)
+  expect(staleRequests).toEqual([])
+  await expect(page.getByRole('alert')).toHaveCount(0)
+})
+
 test('empty installation starts device authorization without account IDs or JSON', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByText('模拟预览，不会登录真实账号或修改宿主')).toBeVisible()

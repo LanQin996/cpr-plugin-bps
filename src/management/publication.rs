@@ -15,7 +15,7 @@ pub async fn save(
     previous: &Config,
     next: &Config,
     call: &TypedCall<ManagementRequest>,
-) -> Result<(), PluginFault> {
+) -> Result<bool, PluginFault> {
     require_admin(call)?;
     let rows = admin(call, "GET", "/api/admin/plugins/instances", None).await?;
     let row = rows
@@ -33,6 +33,10 @@ pub async fn save(
             "插件配置已变化，请刷新后继续",
         ));
     }
+    // 仍先检查宿主当前配置，不能把并发冲突误报成无变化保存成功。
+    if previous == next {
+        return Ok(false);
+    }
     let request = json!({"id":call.context.instance_id,"instance":{
         "name":row["name"],"artifactSha256":row["artifactSha256"],"enabled":true,
         "configuration":next,"bindings":row["bindings"],"expectedRevision":row["revision"]
@@ -45,7 +49,7 @@ pub async fn save(
         Some(request),
     )
     .await?;
-    Ok(())
+    Ok(true)
 }
 
 pub(crate) fn require_admin(call: &TypedCall<ManagementRequest>) -> Result<(), PluginFault> {

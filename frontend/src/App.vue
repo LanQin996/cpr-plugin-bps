@@ -6,7 +6,7 @@ import { useAccounts } from './useAccounts'
 import { accountLabel } from './api'
 
 defineProps<{ preview: boolean }>()
-const { snapshot, loading, busy, error, notice, dialog, modelsDialog, hostDialog, selectedGroups, selectedAccounts, effectiveAccounts, byGroup, toggleGroup, toggleAccount, clearSelection, saveSelection, selected, adding, mode, label, modelsText, prompt, stage, expired, fileName, fileContent, dialogError, refresh, open, resume, poll, login, readFile, importFile, openAuthorization, copyCode, logout, editModels, saveModels } = useAccounts()
+const { snapshot, loading, busy, reloadRequired, error, notice, dialog, modelsDialog, hostDialog, selectedGroups, selectedAccounts, effectiveAccounts, byGroup, toggleGroup, toggleAccount, clearSelection, saveSelection, selected, adding, mode, label, modelsText, prompt, stage, expired, fileName, fileContent, dialogError, refresh, open, resume, poll, login, readFile, importFile, openAuthorization, copyCode, logout, editModels, saveModels } = useAccounts()
 function expiry(value?: number | null) { return value ? `${new Date(value * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '未提供有效期' }
 </script>
 
@@ -14,6 +14,8 @@ function expiry(value?: number | null) { return value ? `${new Date(value * 1000
   <ZConfigProvider :locale="zhHans">
     <main class="flex min-w-0 flex-col gap-4 font-sans text-z-text" :class="{ 'p-5': preview }" :aria-busy="loading">
       <div v-if="preview" class="rounded-z bg-z-warning-container px-3 py-2 text-z-sm text-z-warning-on-container" role="note">模拟预览，不会登录真实账号或修改宿主</div>
+      <div v-if="reloadRequired" role="status" class="rounded-z bg-z-success-container px-4 py-3 text-z-sm text-z-success-on-container">设置已保存并生效。继续管理前，请点击宿主页面右上角的刷新按钮。</div>
+      <fieldset :disabled="reloadRequired" class="m-0 flex min-w-0 flex-col gap-4 border-0 p-0" aria-label="账号管理操作">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex items-center gap-2"><span class="font-emphasis">已接入账号</span><ZTag>{{ snapshot.accounts.length }} / 256</ZTag></div>
         <div class="flex items-center gap-2">
@@ -90,6 +92,7 @@ function expiry(value?: number | null) { return value ? `${new Date(value * 1000
         <ZFormItem label="模型 ID，每行一个"><ZTextarea v-model="modelsText" :rows="5" :disabled="busy" aria-label="模型 ID，每行一个" /></ZFormItem>
         <template #footer><ZButton :disabled="busy" @click="modelsDialog = false">取消</ZButton><ZButton type="primary" :loading="busy" @click="saveModels">保存</ZButton></template>
       </ZDialog>
+      </fieldset>
     </main>
   </ZConfigProvider>
 </template>
