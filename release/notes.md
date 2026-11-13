@@ -1,6 +1,13 @@
-## BPS 原生插件 v0.2.1
+## BPS 原生插件 v0.2.2
 
-修复实际宿主中账号列表空白、分组勾选后仍显示 0 个账号的问题。
+修复生成请求在出站前被宿主拒绝为 `400 invalid_request` 的 WebSocket 握手故障。
+
+- 移除宿主受管 WebSocket 禁止的 `Sec-WebSocket-Protocol` 头
+- 使用 BPS 已验证支持的 Authorization 认证，继续沿用宿主代理、TLS、取消和资源回收
+- 补充握手合同回归检查，禁止插件自行设置 `Sec-WebSocket-*` 头
+- 上游 `request_rejected` 等业务拒绝原样返回，不伪造成功或自动重放
+
+以下为保留的账号选择与管理能力：
 
 - 账号名为空时显示邮箱，邮箱也为空时显示账号 ID，复选框始终有可点击名称
 - 分组成员关系改从宿主账号管理页相同接口读取，修复宿主简化投影返回空成员关系的问题
@@ -23,21 +30,21 @@
 
 下载与 **Codex Proxy RS 宿主** 匹配的安装包及 `.sha256`：
 
-- Linux x86_64：`local.bps-0.2.1-x86_64-unknown-linux-gnu.tar.gz`
-- Linux ARM64：`local.bps-0.2.1-aarch64-unknown-linux-gnu.tar.gz`
+- Linux x86_64：`local.bps-0.2.2-x86_64-unknown-linux-gnu.tar.gz`
+- Linux ARM64：`local.bps-0.2.2-aarch64-unknown-linux-gnu.tar.gz`
 
 在宿主插件管理中上传安装包，或使用 GitHub 来源 `LanQin996/cpr-plugin-bps` 安装。GitHub 自动生成的 Source code 归档不是插件安装包。
 
 声明兼容宿主 `>=3.33.0, <4.0.0`，需要清单 v2、RPC v7、management v2 和 upstream_adapter v5。Linux 发行包需要 glibc 2.34+。
 
-更新后选择并启用 v0.2.1，刷新扩展页。先前已选分组但生效数为 0 的情况，重新应用原选择即可，无需重新登录。
+更新后选择并启用 v0.2.2，现有账号、分组选择和模型设置保留，无需重新登录。
 
 ### 当前边界
 
-- 自动测试使用模拟宿主和 BPS 数据，没有进行真实账号生成验收
+- 自动测试使用模拟宿主和 BPS 数据，另用实际宿主账号验证 Authorization-only 握手成功返回 101
 - 已有 Key 的分组权限不自动放宽，账号组按宿主常规权限管理维护
 - 分组按保存时成员展开，成员变化后需刷新并重新应用选择
-- 宿主 OAuth 的 BPS app/scope、账号及模型权限尚未实测，上游拒绝时保留原始原因
+- 实测账号的 `gpt-6-astra`、`gpt-6.1-sol` 仍被 BPS 返回 `request_rejected`，握手修复不代表生成权限恢复
 - 独立 BPS OAuth 不自动刷新，宿主复用模式沿用宿主刷新机制
 - 不支持 previous_response_id，需要完整历史
 - legacy SSE、实验性 ARC 和图像中继托管未包含在此版本

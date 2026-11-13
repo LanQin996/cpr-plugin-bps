@@ -116,11 +116,8 @@ pub async fn execute(
         ("origin".into(), b"https://bps.openai.com".to_vec()),
         ("user-agent".into(), b"Mozilla/5.0".to_vec()),
         ("accept".into(), b"*/*".to_vec()),
-        (
-            "sec-websocket-protocol".into(),
-            format!("responses, openai-bearer.{}", credentials.access_token).into_bytes(),
-        ),
     ];
+    // BPS 接受 Authorization 认证，不声明宿主受管握手禁止的 Sec-WebSocket-* 头
     headers.extend(
         profile
             .as_object()

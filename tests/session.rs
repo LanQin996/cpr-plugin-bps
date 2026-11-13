@@ -91,7 +91,9 @@ async fn run(scenario: Scenario) -> Vec<UpstreamAdapterEvent> {
                         "host.upstream.websocket.open"=>{
                             assert_eq!(params["path"],"basispoints/api/responses");
                             let query=params["query"].to_string(); assert!(!query.contains("fixture-bps-token"));
-                            assert!(params["headers"].as_array().unwrap().iter().any(|header|header[0]=="sec-websocket-protocol"));
+                            assert!(params["headers"].as_array().unwrap().iter().all(|header|!header[0].as_str().unwrap().to_ascii_lowercase().starts_with("sec-websocket-")),"Managed WebSocket owns handshake headers");
+                            let authorization=params["headers"].as_array().unwrap().iter().find(|header|header[0]=="authorization").expect("BPS authentication must use Authorization");
+                            let authorization:Vec<u8>=serde_json::from_value(authorization[1].clone()).unwrap();assert!(authorization.starts_with(b"Bearer "));
                             if host_mode {
                                 let header=params["headers"].as_array().unwrap().iter().find(|header|header[0]=="authorization").unwrap();
                                 let bytes:Vec<u8>=serde_json::from_value(header[1].clone()).unwrap();assert_eq!(bytes,b"Bearer native-host-fixture");

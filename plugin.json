@@ -3,7 +3,7 @@
   "name": "bps",
   "displayName": "BPS 原生适配器",
   "publisher": "local",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "原生实现 BPS OAuth、WebSocket、Responses 和客户端工具协议，不需要本地桥接服务",
   "license": "MIT",
   "engines": { "codex-proxy-rs": ">=3.33.0, <4.0.0" },

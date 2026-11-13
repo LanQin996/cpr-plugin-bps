@@ -11,7 +11,7 @@ Responses 客户端 → Codex Proxy RS → 本插件 → BPS WebSocket
 
 ## 实现范围
 
-- 原生 BPS `response.create`、Excel 客户端 profile、认证子协议、请求 ID 和 resume token
+- 原生 BPS `response.create`、Excel 客户端 profile、Authorization 认证、请求 ID 和 resume token
 - 优先复用宿主已有 OpenAI OAuth 账号，无需重新登录，沿用原账号代理和宿主凭据刷新
 - 安装即启用，管理页面提供宿主账号选择、模型设置和取消接入
 - 独立 BPS 设备授权、PKCE 验证和 OAuth 文件导入作为可选备用方式
@@ -52,6 +52,8 @@ Issue #278 发布时的 `v3.14.0` 不等于当前插件合同。本插件没有�
 复用模式每次生成从宿主读取当前所选账号的 OAuth，核对凭据 revision，不将 Token 复制到插件状态，不修改宿主 AT/RT。宿主按原有机制刷新凭据，账号代理和 Key 权限继续由宿主控制。插件只读取账号目录供选择，执行时才读取该账号的凭据，不读取本机 Codex 文件或浏览器登录信息。
 
 宿主 OAuth 可以尝试 BPS，但 BPS 是否接受其 app/scope、账号和模型权限仍以真实返回为准。授权被拒绝时显示上游原因，不自动跳转登录或覆盖原账号。切换到 BPS 后建议新建会话，不能复用原通道的 `previous_response_id`。
+
+WebSocket 握手使用 BPS 已验证支持的 Authorization 认证，不设置 `Sec-WebSocket-*` 头，由宿主生成和校验 Upgrade。v0.2.2 修复旧版手动附加子协议头导致的本地 `400 invalid_request`。连接修复不改变上游访问限制，若 BPS 返回 `request_rejected`，保留原始错误，不自动重连、换号或重放。
 
 ### 独立 BPS 授权（可选）
 
