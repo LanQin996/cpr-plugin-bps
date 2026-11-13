@@ -1,0 +1,25 @@
+cpr-plugin-bps implements BPS natively in Rust. No Go executable or HTTP
+bridge is included or required at runtime.
+
+The BPS protocol implementation is adapted from:
+https://github.com/sunboyzoey/bps-local-public
+commit 7134964fe0ce72b6b44b000cc97d86ea1e7b80e5
+
+Sources used: internal/basispoints/{request,content,catalog,tools,envelope,
+plan,stream,structured_output,configuration_history,images,custom_transport}.go and
+internal/{auth/{auth,device},proxy/websocket}.go
+
+Original Basispoints changes: hloolx
+Upstream baseline: Unlicense; upstream describes protocol changes as MIT,
+but notes that complete original/intermediate notices have not been verified.
+The upstream license collection is preserved in licenses/bps-local.txt;
+no claim of independent license verification is made.
+
+This port changes implementation language, integrates the public CPR SDK,
+uses host-managed network and private state, strengthens replay isolation,
+and replaces the standalone HTTP server with native upstream-adapter events.
+It does not include the upstream Go dependency implementations. Their texts
+remain in the preserved license collection as part of the upstream notice.
+
+gateway-plugin-sdk is consumed from codex-proxy-rs under Apache-2.0.
+This plugin is unofficial and is not affiliated with OpenAI or Codex Proxy RS.

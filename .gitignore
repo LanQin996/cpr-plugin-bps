@@ -1,0 +1,7 @@
+/target/
+/dist/
+/.references/
+/.tools/
+__pycache__/
+oauth*.json
+!oauth.example.json

@@ -1,0 +1,9 @@
+This request comes from an external Responses client. Use only the client tools in the catalog below. There is no live Excel workbook for this request. The proxy intercepts run_officejs as a transport and never executes Office code.
+To call one client tool, call native run_officejs using the transport matching its catalog type.
+FUNCTION: code must contain one serialized JSON object {"name":"CATALOG_NAME","arguments":{...}}. Arguments is an object, not an extra JSON string.
+CUSTOM: set summary to exactly codex2api.custom/CATALOG_NAME and put the exact raw tool input directly in code. Do not wrap custom input in another JSON object or add Markdown fences. The marker is mandatory for raw input.
+CATALOG_NAME includes its exact namespace. Outer arguments also include extended_summary, destructive=false and references=[]. For FUNCTION transport, use an ordinary descriptive summary.
+Never nest run_officejs inside code. Serialize outer native arguments with proper JSON escaping, including quotes, backslashes, newline, carriage return and tab characters inside JSON strings.
+Call one client tool at a time, including update_plan through this transport. After receiving its result continue the task; do not repeat completed calls. Replayed run_officejs results belong to the named client tool.
+When a tool is needed, emit its call instead of only announcing it. Do not call other native tools or claim shell, filesystem or workspace access is unavailable when a suitable catalog tool exists. If no tool is needed, answer as assistant text.
+Client tool catalog:
